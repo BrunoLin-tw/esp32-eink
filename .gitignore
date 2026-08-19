@@ -1,0 +1,20 @@
+# PlatformIO
+.pio/
+.vscode/
+.pioenvs/
+.piolibdeps/
+
+# 密鑰與憑證（AGENTS.md 密鑰規則：不得 commit Wi-Fi 憑證、API key、私鑰、token）
+secrets.h
+credentials.h
+*.key
+*.pem
+.env
+.env.*
+config/credentials/*
+!config/credentials/.gitkeep
+
+# 系統與雜項
+.DS_Store
+__pycache__/
+*.pyc
