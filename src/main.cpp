@@ -62,6 +62,7 @@ bool requireDisplay() {
 // ---------- 前向宣告 ----------
 void cmdInfo();
 void cmdDisplay();
+void cmdPartial();
 
 // ---------- 指令分派表 ----------
 struct TestCmd {
@@ -73,6 +74,7 @@ struct TestCmd {
 TestCmd commands[] = {
   {'i', "info", cmdInfo},
   {'d', "display", cmdDisplay},
+  {'p', "partial", cmdPartial},
 };
 
 void printMenu() {
@@ -108,6 +110,38 @@ void cmdDisplay() {
   drawTestPattern();  // firstPage/nextPage 迴圈結束時即完成刷新；不進 hibernate，供後續測試使用
   LOGF("test pattern refresh: %lu ms\n", (unsigned long)(millis() - t0));
   epdInitialized = true;
+}
+
+const int PARTIAL_COUNT = 30;   // 本輪總更新次數
+const int PARTIAL_BATCH = 10;   // 每 10 次 partial 插入一次 full refresh
+
+void drawCounter(int n) {
+  display.setPartialWindow(0, 0, display.width(), 96);
+  display.firstPage();
+  do {
+    display.fillRect(0, 0, display.width(), 96, GxEPD_WHITE);
+    display.setTextSize(3);
+    display.setTextColor(GxEPD_BLACK);
+    display.setCursor(16, 56);
+    display.printf("partial #%d", n);
+  } while (display.nextPage());
+}
+
+void cmdPartial() {
+  if (!requireDisplay()) return;
+  uint32_t tAll = millis();
+  for (int n = 1; n <= PARTIAL_COUNT; n++) {
+    uint32_t t0 = millis();
+    drawCounter(n);
+    LOGF("partial %d: %lu ms\n", n, (unsigned long)(millis() - t0));
+    if (n % PARTIAL_BATCH == 0 && n < PARTIAL_COUNT) {
+      LOGF("-- full refresh inserted (every %d partials)\n", PARTIAL_BATCH);
+      display.setFullWindow();
+      drawTestPattern();  // nextPage 迴圈結束即完成全刷
+    }
+  }
+  LOGF("batch done: %d partials in %lu ms\n",
+       PARTIAL_COUNT, (unsigned long)(millis() - tAll));
 }
 
 // ---------- 主程式 ----------
