@@ -53,6 +53,6 @@
 - 驗證等級：有硬體。依序執行並記錄：build → upload → serial log → full refresh → partial refresh → sleep/wake，外加按鍵、microSD、Wi-Fi 掃描。
 - 回報時明確標示實際執行的驗證，不得宣稱未執行項目。
 
-## 未定事項
+## 已定事項補記
 
-- platform／framework 的確切 pinned 版本：首次編譯成功後填入並記錄。
+- platform／framework pinned 版本（首次編譯成功後核對）：platform `espressif32@7.0.1`；framework `framework-arduinoespressif32@3.20017.241212+sha.dcc1105b`（Arduino core ESP32 2.0.17）；GxEPD2 `1.6.9`。
