@@ -389,3 +389,29 @@ Portable workflow 日後可用 Pillow 建立：讀圖、縮放或裁切至 792x2
 - [ESPBoards ESPHome external component](https://github.com/ESPBoards/esphome-lvgl-crowpanel-epaper-5.79-4.2)：community project，非 ELECROW 或 ESPHome upstream 保證。
 - [MicroPython `ESP32_GENERIC_S3` downloads](https://micropython.org/download/ESP32_GENERIC_S3/)：官方通用 ESP32-S3 firmware，不含此板顯示 driver。
 - [`omiq/crowpanel`](https://github.com/omiq/crowpanel)：community implementation，使用前需核對型號、腳位與版本。
+
+## 實機 bring-up 量測（2026-08-24）
+
+量測方法：PlatformIO + `main.cpp` serial 選單測試韌體（見
+`docs/superpowers/specs/2026-08-24-bringup-verification-design.md`），
+時間戳取自 `millis()`，USB-C 經 CH340C（`/dev/ttyUSB0`），上傳速度
+460800 穩定。韌體以 GxEPD2 1.6.9、platform espressif32@7.0.1
+（Arduino core ESP32 2.0.17）、`qio_opi` PSRAM 設定建置。
+
+| 項目 | 結果 |
+| --- | --- |
+| 晶片／Flash／PSRAM | `ESP32-S3 rev=0 cores=2`；8192 KB Flash @ 80 MHz；PSRAM 偵測成功（回報 8386279 bytes，heap 可用大小） |
+| init 呼叫耗時 | 22 ms（clean full refresh 發生於第一次更新） |
+| clean full refresh | 4415 ms（兩顆 SSD1683 各 `_Update_Full 1741000 us`） |
+| partial 單次耗時 | 664 ms，30 次全部一致（`_Update_Part 486001 us`） |
+| 30 次 partial 批次總耗時 | 24388 ms（第 10、20 次後各插入一次全刷） |
+| 按鍵（MENU/EXIT/UP/DOWN/PRESS） | 全部通過，pressed/released 無重複無漏報 |
+| microSD 讀寫 | 通過：FAT32 卡寫入＋讀回比對正確，卸載後 GPIO42 關閉；拔卡時正確回報 init failed 且不影響選單 |
+| Wi-Fi 掃描 | 找到 7 個網路（RSSI -83 至 -96），掃描後射頻正常關閉 |
+| deep sleep → timer 喚醒 | 通過：10 秒 timer 喚醒，`rst:0x5 (DSLEEP)`，RTC memory `sleepCount=1` |
+
+異常事件：
+- 首次上傳遇到 `/dev/ttyUSB0` 權限問題，將使用者加入 `dialout` 群組後解決。
+- 測試圖樣文字框初版高度不足導致第二行文字溢出，已加高修正（不影響硬體結論）。
+- 觀察到 full refresh 實測 4415 ms 高於 GxEPD2 標頭標註的 nominal 2200 ms；
+  推論與雙 controller 序列更新及 SPI 資料傳輸有關，留待後續應用設計納入考量。
