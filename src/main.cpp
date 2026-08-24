@@ -3,6 +3,7 @@
 #include <SPI.h>
 #include <GxEPD2_BW.h>
 #include <SD.h>
+#include <WiFi.h>
 
 // ---------- 日誌 ----------
 #define LOGF(...) do { \
@@ -115,6 +116,7 @@ void cmdDisplay();
 void cmdPartial();
 void cmdButtons();
 void cmdSd();
+void cmdWifi();
 
 // ---------- 指令分派表 ----------
 struct TestCmd {
@@ -129,6 +131,7 @@ TestCmd commands[] = {
   {'p', "partial", cmdPartial},
   {'b', "buttons", cmdButtons},
   {'s', "sd", cmdSd},
+  {'w', "wifi", cmdWifi},
 };
 
 void printMenu() {
@@ -254,6 +257,22 @@ void cmdSd() {
   SD.end();
   sdPowerDown();
   LOGF("SD unmounted, GPIO42 low\n");
+}
+
+void cmdWifi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  LOGF("wifi scanning...\n");
+  int n = WiFi.scanNetworks();
+  LOGF("found %d networks\n", n);
+  for (int i = 0; i < n; i++) {
+    LOGF("%2d ch=%02d rssi=%4d %s\n",
+         i, WiFi.channel(i), WiFi.RSSI(i), WiFi.SSID(i).c_str());
+  }
+  WiFi.scanDelete();
+  WiFi.mode(WIFI_OFF);
+  LOGF("wifi off\n");
 }
 
 // ---------- 主程式 ----------
