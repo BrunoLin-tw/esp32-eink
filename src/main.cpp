@@ -74,6 +74,8 @@ GxEPD2_BW<GxEPD2_579_GDEY0579T93, GxEPD2_579_GDEY0579T93::HEIGHT> display(
 
 bool epdInitialized = false;
 
+RTC_DATA_ATTR uint32_t sleepCount = 0;  // 跨 deep sleep 保存
+
 void epdPowerOn() {
   pinMode(EPD_PWR, OUTPUT);
   digitalWrite(EPD_PWR, HIGH);
@@ -117,6 +119,7 @@ void cmdPartial();
 void cmdButtons();
 void cmdSd();
 void cmdWifi();
+void cmdSleep();
 
 // ---------- 指令分派表 ----------
 struct TestCmd {
@@ -132,6 +135,7 @@ TestCmd commands[] = {
   {'b', "buttons", cmdButtons},
   {'s', "sd", cmdSd},
   {'w', "wifi", cmdWifi},
+  {'z', "sleep", cmdSleep},
 };
 
 void printMenu() {
@@ -275,6 +279,25 @@ void cmdWifi() {
   LOGF("wifi off\n");
 }
 
+void cmdSleep() {
+  LOGF("shutdown sequence starting\n");
+  if (epdInitialized) {
+    display.hibernate();      // controller 深休眠（含內部 BUSY 等待）
+    epdInitialized = false;
+  }
+  pinMode(EPD_PWR, OUTPUT);    // 未跑過 'd' 時也確保腳位已設定
+  digitalWrite(EPD_PWR, LOW);  // GPIO7 拉低
+  WiFi.mode(WIFI_OFF);         // 射頻停用
+  // SD 已在每次 's' 結束時卸載並關閉 GPIO42，此處無需處理
+  btnPollingEnabled = false;
+  LOGF("entering deep sleep, timer wake in 10 s\n");
+  Serial.flush();
+  delay(1000);
+  sleepCount++;
+  esp_sleep_enable_timer_wakeup(10ULL * 1000000ULL);
+  esp_deep_sleep_start();
+}
+
 // ---------- 主程式 ----------
 void setup() {
   Serial.begin(115200);
@@ -282,6 +305,7 @@ void setup() {
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   if (cause == ESP_SLEEP_WAKEUP_TIMER) {
     LOGF("wake from deep sleep (timer)\n");
+    LOGF("sleepCount=%lu\n", (unsigned long)sleepCount);
   } else {
     LOGF("power-on/reset (cause=%d)\n", (int)cause);
   }
