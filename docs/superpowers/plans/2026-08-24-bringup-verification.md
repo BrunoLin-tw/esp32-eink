@@ -312,7 +312,8 @@ bool requireDisplay() {
 void cmdDisplay() {
   epdPowerOn();
   SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
-  display.epd2.setBusyTimeout(15000000);  // BUSY 安全上限 15 s（microseconds）
+  // BUSY timeout 由 GxEPD2 1.6.9 內建（預設 10 s，等待中以 delay(1)+yield() 讓出執行權），
+  // 該版本無公開 setBusyTimeout API，不需額外設定
   uint32_t t0 = millis();
   display.init(115200, true, 2, false);   // init 含第一次 clean full refresh
   LOGF("init + clean full refresh: %lu ms\n", (unsigned long)(millis() - t0));
