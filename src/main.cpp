@@ -18,6 +18,46 @@
 #define EPD_BUSY 48
 #define EPD_PWR   7
 
+// 按鍵（active-low，docs/device-research.md）
+#define BTN_MENU  2
+#define BTN_EXIT  1
+#define BTN_UP    6
+#define BTN_DOWN  4
+#define BTN_PRESS 5
+
+struct Btn {
+  const char* name;
+  uint8_t pin;
+  bool last;  // true = released
+};
+
+Btn buttons[] = {
+  {"MENU",  BTN_MENU,  true},
+  {"EXIT",  BTN_EXIT,  true},
+  {"UP",    BTN_UP,    true},
+  {"DOWN",  BTN_DOWN,  true},
+  {"PRESS", BTN_PRESS, true},
+};
+
+bool btnPollingEnabled = false;
+uint32_t lastPollMs = 0;
+const uint32_t DEBOUNCE_MS = 30;
+
+void pollButtons() {
+  if (!btnPollingEnabled) return;
+  uint32_t now = millis();
+  if (now - lastPollMs < DEBOUNCE_MS) return;
+  lastPollMs = now;
+  for (auto& b : buttons) {
+    bool released = digitalRead(b.pin);  // active-low
+    if (released != b.last) {
+      b.last = released;
+      LOGF("button %s (GPIO%u) %s\n",
+           b.name, b.pin, released ? "released" : "pressed");
+    }
+  }
+}
+
 GxEPD2_BW<GxEPD2_579_GDEY0579T93, GxEPD2_579_GDEY0579T93::HEIGHT> display(
     GxEPD2_579_GDEY0579T93(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY));
 
@@ -63,6 +103,7 @@ bool requireDisplay() {
 void cmdInfo();
 void cmdDisplay();
 void cmdPartial();
+void cmdButtons();
 
 // ---------- 指令分派表 ----------
 struct TestCmd {
@@ -75,6 +116,7 @@ TestCmd commands[] = {
   {'i', "info", cmdInfo},
   {'d', "display", cmdDisplay},
   {'p', "partial", cmdPartial},
+  {'b', "buttons", cmdButtons},
 };
 
 void printMenu() {
@@ -144,6 +186,12 @@ void cmdPartial() {
        PARTIAL_COUNT, (unsigned long)(millis() - tAll));
 }
 
+void cmdButtons() {
+  btnPollingEnabled = !btnPollingEnabled;
+  LOGF("button polling %s (run 'b' again to toggle off)\n",
+       btnPollingEnabled ? "ON" : "OFF");
+}
+
 // ---------- 主程式 ----------
 void setup() {
   Serial.begin(115200);
@@ -153,6 +201,9 @@ void setup() {
     LOGF("wake from deep sleep (timer)\n");
   } else {
     LOGF("power-on/reset (cause=%d)\n", (int)cause);
+  }
+  for (auto& b : buttons) {
+    pinMode(b.pin, INPUT_PULLUP);
   }
   printMenu();
 }
@@ -170,5 +221,6 @@ void loop() {
       }
     }
   }
+  pollButtons();
   delay(10);
 }
