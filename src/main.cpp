@@ -2,6 +2,7 @@
 #include <esp_sleep.h>
 #include <SPI.h>
 #include <GxEPD2_BW.h>
+#include <SD.h>
 
 // ---------- 日誌 ----------
 #define LOGF(...) do { \
@@ -24,6 +25,15 @@
 #define BTN_UP    6
 #define BTN_DOWN  4
 #define BTN_PRESS 5
+
+// microSD 腳位（docs/device-research.md）；與顯示器使用不同 SPI 匯流排
+#define SD_CS   10
+#define SD_SCK  39
+#define SD_MISO 13
+#define SD_MOSI 40
+#define SD_PWR  42
+
+SPIClass sdSPI(HSPI);
 
 struct Btn {
   const char* name;
@@ -104,6 +114,7 @@ void cmdInfo();
 void cmdDisplay();
 void cmdPartial();
 void cmdButtons();
+void cmdSd();
 
 // ---------- 指令分派表 ----------
 struct TestCmd {
@@ -117,6 +128,7 @@ TestCmd commands[] = {
   {'d', "display", cmdDisplay},
   {'p', "partial", cmdPartial},
   {'b', "buttons", cmdButtons},
+  {'s', "sd", cmdSd},
 };
 
 void printMenu() {
@@ -190,6 +202,58 @@ void cmdButtons() {
   btnPollingEnabled = !btnPollingEnabled;
   LOGF("button polling %s (run 'b' again to toggle off)\n",
        btnPollingEnabled ? "ON" : "OFF");
+}
+
+void sdPowerDown() {
+  digitalWrite(SD_PWR, LOW);
+}
+
+void cmdSd() {
+  pinMode(SD_PWR, OUTPUT);
+  sdPowerDown();
+  digitalWrite(SD_PWR, HIGH);  // 使用卡片前先拉高 GPIO42
+  delay(10);
+  sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+  if (!SD.begin(SD_CS, sdSPI)) {
+    LOGF("[fail] SD init failed (no card / not FAT32 / bad contact)\n");
+    sdPowerDown();
+    return;
+  }
+  LOGF("SD ok, card size=%llu MB\n",
+       (unsigned long long)(SD.cardSize() / (1024ULL * 1024ULL)));
+
+  const char* path = "/bringup.txt";
+  const char* msg = "esp32-eink bring-up test";
+  if (SD.exists(path)) SD.remove(path);
+  File f = SD.open(path, FILE_WRITE);
+  if (!f) {
+    LOGF("[fail] open for write\n");
+    SD.end();
+    sdPowerDown();
+    return;
+  }
+  f.print(msg);
+  f.close();
+
+  f = SD.open(path, FILE_READ);
+  if (!f) {
+    LOGF("[fail] open for read\n");
+    SD.end();
+    sdPowerDown();
+    return;
+  }
+  String got = f.readString();
+  f.close();
+
+  if (got == msg) {
+    LOGF("write/read verify OK (%u bytes)\n", (unsigned)got.length());
+  } else {
+    LOGF("[fail] readback mismatch\n");
+  }
+  SD.remove(path);
+  SD.end();
+  sdPowerDown();
+  LOGF("SD unmounted, GPIO42 low\n");
 }
 
 // ---------- 主程式 ----------
