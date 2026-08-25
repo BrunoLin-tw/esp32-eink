@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "log.h"
+#include "icons.h"
 #include <SPI.h>
 #include <GxEPD2_BW.h>
 
@@ -53,8 +54,8 @@ void uiRenderDashboard(const Location& loc, const WeatherData& d) {
       drawText(16, 60, 2, buf);
     }
 
-    // 圖示區（Task 6 填入）：右上 96x96 留白框
-    display.drawRect(680, 24, 96, 96, GxEPD_BLACK);
+    // 圖示區：右上 96x96
+    drawIcon(680, 24, 96, iconForCode(d.code));
 
     // 目前狀態：大字溫度
     snprintf(buf, sizeof(buf), "%.1f\xF8" "C", d.temp);  // \xF8 = °(CP437)
@@ -79,6 +80,7 @@ void uiRenderDashboard(const Location& loc, const WeatherData& d) {
       if (i > 0) display.drawFastVLine(cx, 196, 76, GxEPD_BLACK);
       snprintf(buf, sizeof(buf), "%02d:00", (startH + i) % 24);
       drawText(cx + 12, 208, 2, buf);
+      drawIcon(cx + cellW - 44, 204, 32, iconForCode(d.hours[i].code));
       snprintf(buf, sizeof(buf), "%.0f\xF8%d%%",
                d.hours[i].temp, d.hours[i].precipProb);
       drawText(cx + 10, 240, 3, buf);
