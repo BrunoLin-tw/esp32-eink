@@ -14,6 +14,15 @@ void setup() {
   LOGF("weather station skeleton, ssid set=%s\n",
        strlen(WIFI_SSID) > 0 ? "yes" : "no");
   wifiConnect(15000);
+  if (syncClock(10000)) {
+    struct tm tmLoc;
+    // 板橋位移量暫代，Task 4 起改用 API 回傳值
+    if (localTime(8 * 3600L, &tmLoc)) {
+      LOGF("local time: %04d-%02d-%02d %02d:%02d:%02d\n",
+           tmLoc.tm_year + 1900, tmLoc.tm_mon + 1, tmLoc.tm_mday,
+           tmLoc.tm_hour, tmLoc.tm_min, tmLoc.tm_sec);
+    }
+  }
 }
 
 void loop() {
