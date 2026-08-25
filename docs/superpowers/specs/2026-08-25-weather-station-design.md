@@ -121,6 +121,6 @@
 6. 完整週期：timer 30 分自動喚醒刷新；全程 serial log 存查
 7. 收尾：耗時與行為記錄至 device-research.md
 
-## 未定事項
+## 已定事項補記
 
-- ArduinoJson 確切 pinned 版本：首次編譯成功後填入並記錄。
+- ArduinoJson pinned 版本（首次編譯成功後核對）：`bblanchon/ArduinoJson@7.4.3`。
