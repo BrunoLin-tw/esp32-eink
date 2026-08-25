@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "log.h"
+#include "weather.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -12,6 +13,7 @@ void setup() {
   delay(500);
   LOGF("weather station skeleton, ssid set=%s\n",
        strlen(WIFI_SSID) > 0 ? "yes" : "no");
+  wifiConnect(15000);
 }
 
 void loop() {
