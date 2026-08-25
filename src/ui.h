@@ -14,3 +14,9 @@ void uiShowOffline(const char* reason);
 
 // hibernate controller（deep sleep 前呼叫）。
 void uiHibernate();
+
+// awake 模式提示條：partial refresh 顯示所選地點名與操作說明。
+void uiAwakeHint(const char* name);
+
+// 清除 awake 提示（partial refresh 恢復原狀）。
+void uiClearHint();

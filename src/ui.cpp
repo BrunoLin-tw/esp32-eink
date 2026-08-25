@@ -52,6 +52,7 @@ void uiRenderDashboard(const Location& loc, const WeatherData& d) {
   if (!initialized) return;
   char buf[64];
 
+  display.setFullWindow();  // 離開 partial 視窗模式（awake 提示條會殘留狀態）
   display.firstPage();
   do {
     display.fillScreen(GxEPD_WHITE);
@@ -107,6 +108,7 @@ void uiRenderDashboard(const Location& loc, const WeatherData& d) {
 
 void uiShowOffline(const char* reason) {
   if (!initialized) return;
+  display.setFullWindow();  // 同上：確保整頁更新
   display.firstPage();
   do {
     display.fillScreen(GxEPD_WHITE);
@@ -122,4 +124,30 @@ void uiHibernate() {
     initialized = false;
   }
   digitalWrite(EPD_PWR, LOW);  // GPIO7 拉低
+}
+
+void uiAwakeHint(const char* name) {
+  char buf[72];
+  snprintf(buf, sizeof(buf), "[awake] UP/DOWN: %s   PRESS: refresh", name);
+  int y0 = display.height() - 24;
+  display.setPartialWindow(0, y0, display.width(), 24);
+  display.firstPage();
+  do {
+    display.fillRect(0, y0, display.width(), 24, GxEPD_BLACK);
+    u8g2.setFont(u8g2_font_helvR12_tf);
+    u8g2.setFontMode(1);
+    u8g2.setForegroundColor(GxEPD_WHITE);
+    u8g2.setCursor(10, y0 + 17);
+    u8g2.print(buf);
+  } while (display.nextPage());
+}
+
+void uiClearHint() {
+  int y0 = display.height() - 24;
+  display.setPartialWindow(0, y0, display.width(), 24);
+  display.firstPage();
+  do {
+    display.fillRect(0, y0, display.width(), 24, GxEPD_WHITE);
+    display.drawFastHLine(0, y0, display.width(), GxEPD_BLACK);
+  } while (display.nextPage());
 }
