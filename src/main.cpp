@@ -2,6 +2,7 @@
 #include "log.h"
 #include "weather.h"
 #include "locations.h"
+#include "ui.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -12,23 +13,23 @@
 void setup() {
   Serial.begin(115200);
   delay(500);
-  LOGF("weather station skeleton, ssid set=%s\n",
-       strlen(WIFI_SSID) > 0 ? "yes" : "no");
-  wifiConnect(15000);
-  if (syncClock(10000)) {
-    struct tm tmLoc;
-    // 板橋位移量暫代，Task 4 起改用 API 回傳值
-    if (localTime(8 * 3600L, &tmLoc)) {
-      LOGF("local time: %04d-%02d-%02d %02d:%02d:%02d\n",
-           tmLoc.tm_year + 1900, tmLoc.tm_mon + 1, tmLoc.tm_mday,
-           tmLoc.tm_hour, tmLoc.tm_min, tmLoc.tm_sec);
-    }
+  LOGF("weather station boot\n");
+
+  uiPowerOnInit();
+
+  if (!wifiConnect(15000)) {
+    uiShowOffline("wifi failed");
+    return;  // Task 8 接手 sleep
   }
+  syncClock(10000);
 
   const Location& loc = LOCATIONS[DEFAULT_LOCATION];
   WeatherData data;
   if (fetchWeather(loc.lat, loc.lon, &data)) {
     dumpWeather(data);
+    uiRenderDashboard(loc, data);
+  } else {
+    uiShowOffline("fetch failed");
   }
 }
 
