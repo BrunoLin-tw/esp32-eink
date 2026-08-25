@@ -1,5 +1,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
+#include <esp_sleep.h>
+#include "driver/rtc_io.h"
 #include "log.h"
 #include "weather.h"
 #include "locations.h"
@@ -16,6 +18,9 @@ struct BtnDef {
   const char* name;
   uint8_t pin;
 };
+
+#define SLEEP_US_NORMAL (30ULL * 60ULL * 1000000ULL)
+#define SLEEP_US_RETRY  (5ULL  * 60ULL * 1000000ULL)
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -39,19 +44,44 @@ static void saveLocationIdx(int idx) {
   prefs.end();
 }
 
-static void runUpdateCycle(int locIdx) {
+static bool runUpdateCycle(int locIdx) {
   const Location& loc = LOCATIONS[locIdx];
   if (!wifiConnect(15000)) {
     uiShowOffline("wifi failed");
-    return;
+    return false;
   }
   syncClock(10000);
   WeatherData data;
   if (fetchWeather(loc.lat, loc.lon, &data)) {
     uiRenderDashboard(loc, data);
-  } else {
-    uiShowOffline("fetch failed");
+    return true;
   }
+  uiShowOffline("fetch failed");
+  return false;
+}
+
+static bool wokeByButton() {
+  if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_EXT1) return false;
+  return (esp_sleep_get_ext1_wakeup_status() >> BTN_PRESS) & 1ULL;
+}
+
+static void goToDeepSleep(bool retryShort) {
+  LOGF("sleeping %s\n", retryShort ? "5 min (retry)" : "30 min");
+  uiHibernate();            // controller hibernate + GPIO7 低
+  wifiOff();                // 射頻停用
+  // SD 未掛載；無需處理 GPIO42
+  Serial.flush();
+  delay(500);
+
+  // 撥桿下壓（active-low）作為 EXT1 喚醒源；睡眠期間保持內部拉高
+  esp_sleep_enable_timer_wakeup(retryShort ? SLEEP_US_RETRY : SLEEP_US_NORMAL);
+  esp_sleep_enable_ext1_wakeup(1ULL << BTN_PRESS, ESP_EXT1_WAKEUP_ANY_LOW);
+  rtc_gpio_init((gpio_num_t)BTN_PRESS);
+  rtc_gpio_set_direction((gpio_num_t)BTN_PRESS, RTC_GPIO_MODE_INPUT_ONLY);
+  rtc_gpio_pullup_en((gpio_num_t)BTN_PRESS);
+  rtc_gpio_pulldown_dis((gpio_num_t)BTN_PRESS);
+
+  esp_deep_sleep_start();
 }
 
 // awake 模式：撥桿上下選地點、下壓確認；idleMs 無操作即返回。
@@ -98,7 +128,8 @@ static int awakeLoop(int curIdx, uint32_t idleTimeoutMs) {
 void setup() {
   Serial.begin(115200);
   delay(500);
-  LOGF("weather station boot\n");
+  bool btnWake = wokeByButton();
+  LOGF("boot (%s)\n", btnWake ? "button wake" : "timer/power-on");
 
   pinMode(BTN_MENU, INPUT_PULLUP);
   pinMode(BTN_EXIT, INPUT_PULLUP);
@@ -108,16 +139,26 @@ void setup() {
 
   uiPowerOnInit();
   int idx = loadLocationIdx();
-  runUpdateCycle(idx);
 
-  // T7 暫時驗證用：T8 將改為 sleep/wake 分流
-  int picked = awakeLoop(idx, 20000);
-  if (picked != idx) {
-    saveLocationIdx(picked);
-    runUpdateCycle(picked);
+  bool ok = runUpdateCycle(idx);
+
+  if (!ok) {
+    goToDeepSleep(true);  // 失敗：5 分鐘後重試，不進 awake
+    return;               // 不會到達，防禦性
+  }
+
+  if (btnWake) {
+    int picked = awakeLoop(idx, 20000);
+    if (picked != idx) {
+      saveLocationIdx(picked);
+      runUpdateCycle(picked);  // 確認新地點立即刷新
+    } else {
+      saveLocationIdx(idx);
+    }
   } else {
     saveLocationIdx(idx);
   }
+  goToDeepSleep(false);
 }
 
 void loop() {
