@@ -14,3 +14,25 @@ bool syncClock(uint32_t timeoutMs);
 // 取得「加上位移量」的當地時間（呼叫端傳入 utc_offset_seconds）。
 // 回傳 false 表示時鐘尚未同步。
 bool localTime(long utcOffsetSec, struct tm* out);
+
+struct HourPoint {
+  float temp;
+  int precipProb;
+  int code;
+};
+
+struct WeatherData {
+  bool valid;
+  float temp;      // 目前溫度
+  int humidity;    // 相對濕度 %
+  int windKmh;     // 風速 km/h
+  int code;        // 目前 WMO 天氣碼
+  long utcOffsetSec;
+  HourPoint hours[6];  // 下一個整點起 6 小時
+};
+
+// 抓取並解析指定地點天氣；失敗時 data->valid = false。
+bool fetchWeather(float lat, float lon, WeatherData* data);
+
+// 列出資料內容供人工核對（serial log）。
+void dumpWeather(const WeatherData& d);

@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "log.h"
 #include "weather.h"
+#include "locations.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -22,6 +23,12 @@ void setup() {
            tmLoc.tm_year + 1900, tmLoc.tm_mon + 1, tmLoc.tm_mday,
            tmLoc.tm_hour, tmLoc.tm_min, tmLoc.tm_sec);
     }
+  }
+
+  const Location& loc = LOCATIONS[DEFAULT_LOCATION];
+  WeatherData data;
+  if (fetchWeather(loc.lat, loc.lon, &data)) {
+    dumpWeather(data);
   }
 }
 
