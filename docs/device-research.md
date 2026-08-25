@@ -415,3 +415,28 @@ Portable workflow 日後可用 Pillow 建立：讀圖、縮放或裁切至 792x2
 - 測試圖樣文字框初版高度不足導致第二行文字溢出，已加高修正（不影響硬體結論）。
 - 觀察到 full refresh 實測 4415 ms 高於 GxEPD2 標頭標註的 nominal 2200 ms；
   推論與雙 controller 序列更新及 SPI 資料傳輸有關，留待後續應用設計納入考量。
+
+## 天氣看板應用量測（2026-08-25）
+
+量測方法：天氣看板韌體 serial log（見
+`docs/superpowers/specs/2026-08-25-weather-station-design.md`），
+時間戳取自 `millis()`，USB-C 經 CH340C。依賴：GxEPD2 1.6.9、
+ArduinoJson 7.4.3、U8g2_for_Adafruit_GFX 1.8.0。
+
+| 項目 | 結果 |
+| --- | --- |
+| Wi-Fi 連線 | 約 100–4800 ms（視訊號與快取狀態；RSSI -86 至 -87） |
+| NTP 同步 | 約 1800–4700 ms；同次開機二次呼叫為 0 ms（已同步） |
+| Open-Meteo GET | payload 約 1365–1394 bytes |
+| Dashboard full refresh | 約 4400–4500 ms（兩顆 SSD1683 各 `_Update_Full` 約 1741000 us） |
+| awake 提示條 partial refresh | 單次約 660 ms（`_Update_Part` 486001 us） |
+| 30 分睡眠週期＋timer 喚醒 | 通過 |
+| EXT1 撥桿下壓喚醒 → awake 模式 | 通過（rtc_gpio 內部拉高維持於睡眠期間） |
+| NVS 地點記憶（跨 reset） | 通過 |
+| 失敗路徑（錯誤密碼） | wifi timeout → OFFLINE 全刷 → 5 分短睡眠重試，通過 |
+
+異常事件：
+- GxEPD2 partial 視窗狀態會殘留：awake 提示條的 setPartialWindow
+  未被 setFullWindow 重置前，dashboard 渲染會被塞進局部視窗。
+  已修正並記錄於 commit 43e143c。
+- 大字溫度採 logisoso62_tn（僅純數字字集）＋°C 以 helvR18 接續繪製。
