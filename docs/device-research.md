@@ -472,3 +472,15 @@ ArduinoJson 7.4.3、U8g2_for_Adafruit_GFX 1.8.0。
 5. RTC 快取最後成功看板（`RTC_DATA_ATTR`＋magic 防冷開機誤用）：
    更新成功即快取；之後抓取失敗時重繪快取看板並疊底部
    「OFFLINE - cached data」提示條，而非清屏只顯示 OFFLINE。
+
+### 快取路徑驗證與 RTC 保留語意（2026-08-25 補）
+
+- **RTC 快取保留範圍實測**：跨 deep sleep 保留；經 esptool 上傳的
+  EN（CHIP_PU）reset 會清除 RTC memory——上傳新韌體後第一次開機
+  `haveCache=false`，走整頁 OFFLINE，屬守衛邏輯的正確行為。
+- **目標路徑實測通過**：成功更新入睡後，於睡眠窗口內斷網（路由器
+  關閉），撥桿喚醒 → `[fail] wifi connect timeout` → 快取看板重繪
+  ＋底部「OFFLINE - cached data」badge → `showing cached dashboard`
+  → `sleeping 5 min (retry)`。
+- 營運含義：OTA 或重新燒錄後的第一輪若離線，畫面為整頁 OFFLINE
+  而非前次內容；此為預期，不需處理。
