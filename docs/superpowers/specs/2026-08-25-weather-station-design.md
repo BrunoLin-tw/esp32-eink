@@ -54,10 +54,11 @@
 - API：`https://api.open-meteo.com/v1/forecast`，一次 GET 帶：
   `latitude, longitude, current=temperature_2m,weather_code,wind_speed_10m,
   relative_humidity_2m, hourly=temperature_2m,precipitation_probability,
-  weather_code, timezone=auto, forecast_days=1`
+  weather_code, timezone=auto, forecast_days=2`
   （`timezone=auto` 使回應含 `utc_offset_seconds`，用於當地時間換算。）
-- 解析：ArduinoJson v7；取 current 四項與 hourly 中「下一個整點起 6 格」
-  的溫度、降雨率、天氣碼。
+- 解析：ArduinoJson v7；取 current 四項與 hourly 中「未來五個時間點、
+  間隔三小時」的溫度、降雨率、天氣碼（2026-08-25 需求變更，原為
+  連續六小時；以當地 epoch 推導跨日索引，48 格上限內恆不越界）。
 - NTP：`configTime(0,0,"pool.ntp.org")` 取 UTC，再以 utc_offset_seconds
   換算當地日期時間。
 
@@ -70,7 +71,7 @@
 │ (當地時間)              │ 64x64  │   H:31° L:25°          │
 │                        └────────┘   Rain 60%  Wind 12km/h│
 ├──────────────────────────────────────────────────────────┤
-│ [icon]14:00 29° [icon]15:00 30° [icon]16:00 ... （6 格）  │
+│ [icon]14:00 29° [icon]17:00 30° [icon]20:00 ...（5 點，間隔 3 小時） │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -103,6 +104,11 @@
 - Wi-Fi 連線逾時（15 s）或 HTTP 失敗：顯示錯誤畫面（保留上次成功
   資料若有、加 "OFFLINE - retry in 5 min"），deep sleep 改為 5 分鐘。
 - JSON 解析失敗或欄位缺漏：同上，serial 記錄原因碼。
+- NTP 同步失敗（2026-08-25 補）：時鐘未同步即中止更新流程，
+  不以未同步時間推導預報索引。
+- 快取（2026-08-25 補，已落實）：最後成功看板存 RTC memory
+  （magic 防冷開機誤用）；抓取失敗時重繪快取看板並疊底部
+  「OFFLINE - cached data」提示條。
 - 所有等待（Wi-Fi、HTTP、BUSY）帶 timeout；BUSY 由 GxEPD2 內建
   10 s 逾時處理。
 
