@@ -15,6 +15,7 @@
 - ELECROW 官方 Arduino EPD driver 僅作參考資料與硬體 bring-up 驗證用，不作正式應用程式基礎。
 - 不得在未經使用者同意下導入第二套官方工具鏈（例如 ESP-IDF、MicroPython）。
 - `platformio.ini` 首次建立時即固定依賴版本（library、framework、toolchain），首次成功編譯後核對並記錄；`platformio.ini` 必須放在專案根目錄。
+- PlatformIO 安裝於 `/tmp/opencode/pio-venv/`（含 `pillow`），呼叫時用完整路徑 `/tmp/opencode/pio-venv/bin/pio`；venv 若被清理，依 README「開發環境建置」章節重建。
 - partition layout 必須涵蓋完整 8 MiB Flash；不得照抄官方只映射 4 MiB 的 `Huge APP` 配置。
 - 大而雜的輸出用 `rtk` 過濾；但需要精確原始輸出、除錯失敗、或權限需精準對應底層命令時，不要用 `rtk`。
 

@@ -30,6 +30,34 @@ PlatformIO + Arduino framework。`platformio.ini` 已 pin：
 
 Board 設定：`esp32-s3-devkitc-1` 相容定義、8 MB Flash、`qio_opi` PSRAM、涵蓋完整 8 MiB 的 partition layout。
 
+## 開發環境建置
+
+### 前置需求
+
+- git、Python 3（含 `venv` 模組）
+- 可傳輸資料的 USB-C 線
+- Linux 序列埠權限：`sudo usermod -a -G dialout $USER`，執行後需**重新登入**才生效
+
+### PlatformIO 安裝（隔離 venv）
+
+系統 pip 受 PEP 668（externally-managed-environment）限制，因此安裝在獨立 venv：
+
+```sh
+python3 -m venv /tmp/opencode/pio-venv
+/tmp/opencode/pio-venv/bin/pip install platformio pillow
+```
+
+- `pio` 二進位路徑：`/tmp/opencode/pio-venv/bin/pio`（本專案文件與慣例均以此完整路徑呼叫）
+- `pillow` 供圖示產生器 `tools/gen_icons.py` 使用
+
+### 首次編譯
+
+第一次 `pio run` 會自動下載工具鏈至 `~/.platformio/`（espressif32@7.0.1、xtensa/riscv toolchain、esptool、scons 等，約數百 MB，耗時數分鐘）；之後增量編譯很快。專案函式庫由 `platformio.ini` 固定版本並自動解析至 `.pio/libdeps/`。
+
+### 環境重建
+
+`/tmp/opencode/pio-venv` 若被系統清理，重跑上述兩行指令即可；`~/.platformio/` 的工具鏈不受影響，無須重新下載。
+
 ## 快速開始
 
 1. 安裝 PlatformIO（VS Code extension 或 PlatformIO Core）。
