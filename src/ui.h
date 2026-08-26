@@ -20,3 +20,9 @@ void uiAwakeHint(const char* name);
 
 // 清除 awake 提示（partial refresh 恢復原狀）。
 void uiClearHint();
+
+// 離線提示條：疊在既有畫面底部（用於快取看板或保留前次畫面時）。
+void uiOfflineBadge();
+
+// 深睡前置：所有顯示器控制線固定 LOW 並鎖定，避免浮接產生面板條紋。
+void uiSleepHoldPins();

@@ -4,6 +4,7 @@
 #include <SPI.h>
 #include <GxEPD2_BW.h>
 #include <U8g2_for_Adafruit_GFX.h>
+#include "driver/gpio.h"
 
 #define EPD_SCK  12
 #define EPD_MOSI 11
@@ -32,6 +33,13 @@ void uiPowerOnInit() {
   pinMode(EPD_PWR, OUTPUT);
   digitalWrite(EPD_PWR, HIGH);
   delay(50);
+  // 解除深睡期間的腳位 hold（hold 會延續到喚醒後，不解開 RST/CS 會被鎖死）
+  gpio_hold_dis(GPIO_NUM_12);
+  gpio_hold_dis(GPIO_NUM_11);
+  gpio_hold_dis(GPIO_NUM_45);
+  gpio_hold_dis(GPIO_NUM_46);
+  gpio_hold_dis(GPIO_NUM_47);
+  gpio_deep_sleep_hold_dis();
   SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
   uint32_t t0 = millis();
   display.init(115200, true, 2, false);
@@ -87,16 +95,12 @@ void uiRenderDashboard(const Location& loc, const WeatherData& d) {
     // 分隔線
     display.drawFastHLine(0, 192, display.width(), GxEPD_BLACK);
 
-    // 下半：6 格逐時預報
-    int cellW = display.width() / 6;
-    struct tm tmNow;
-    localTime(d.utcOffsetSec, &tmNow);
-    int startH = tmNow.tm_hour + 1;
-    if (startH > 18) startH = 18;
-    for (int i = 0; i < 6; i++) {
+    // 下半：5 格預報（間隔三小時）
+    int cellW = display.width() / 5;
+    for (int i = 0; i < FORECAST_POINTS; i++) {
       int cx = i * cellW;
       if (i > 0) display.drawFastVLine(cx, 196, 76, GxEPD_BLACK);
-      snprintf(buf, sizeof(buf), "%02d:00", (startH + i) % 24);
+      snprintf(buf, sizeof(buf), "%02d:00", d.hours[i].hourLabel);
       drawText(cx + 10, 216, F_CELL_TIME, buf);
       snprintf(buf, sizeof(buf), "%.0f° %d%%",
                d.hours[i].temp, d.hours[i].precipProb);
@@ -150,4 +154,34 @@ void uiClearHint() {
     display.fillRect(0, y0, display.width(), 24, GxEPD_WHITE);
     display.drawFastHLine(0, y0, display.width(), GxEPD_BLACK);
   } while (display.nextPage());
+}
+
+void uiOfflineBadge() {
+  int y0 = display.height() - 24;
+  display.setPartialWindow(0, y0, display.width(), 24);
+  display.firstPage();
+  do {
+    display.fillRect(0, y0, display.width(), 24, GxEPD_BLACK);
+    u8g2.setFont(u8g2_font_helvR12_tf);
+    u8g2.setFontMode(1);
+    u8g2.setForegroundColor(GxEPD_WHITE);
+    u8g2.setCursor(10, y0 + 17);
+    u8g2.print("OFFLINE - cached data - retry in 5 min");
+  } while (display.nextPage());
+}
+
+void uiSleepHoldPins() {
+  // 全部驅動線拉 LOW（不對未供電的 controller 背向供電；SCK 靜態無
+  // 時脈邊緣，CS LOW 不會鎖入任何資料），並以 hold 維持到醒來。
+  pinMode(EPD_CS, OUTPUT);   digitalWrite(EPD_CS, LOW);
+  pinMode(EPD_DC, OUTPUT);   digitalWrite(EPD_DC, LOW);
+  pinMode(EPD_RST, OUTPUT);  digitalWrite(EPD_RST, LOW);
+  pinMode(EPD_SCK, OUTPUT);  digitalWrite(EPD_SCK, LOW);
+  pinMode(EPD_MOSI, OUTPUT); digitalWrite(EPD_MOSI, LOW);
+  gpio_hold_en(GPIO_NUM_12);
+  gpio_hold_en(GPIO_NUM_11);
+  gpio_hold_en(GPIO_NUM_45);
+  gpio_hold_en(GPIO_NUM_46);
+  gpio_hold_en(GPIO_NUM_47);
+  gpio_deep_sleep_hold_en();
 }

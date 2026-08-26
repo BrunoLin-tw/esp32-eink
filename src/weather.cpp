@@ -64,7 +64,7 @@ static bool buildUrl(const Location& loc, String& url) {
   url += "&longitude=" + String(loc.lon, 4);
   url += "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m";
   url += "&hourly=temperature_2m,precipitation_probability,weather_code";
-  url += "&forecast_days=1&timezone=auto";
+  url += "&forecast_days=2&timezone=auto";  // 兩日資料，支援跨日取樣
   return true;
 }
 
@@ -106,19 +106,40 @@ bool fetchWeather(float lat, float lon, WeatherData* data) {
   data->windKmh = (int)(doc["current"]["wind_speed_10m"] | (float)-1);
   data->utcOffsetSec = doc["utc_offset_seconds"] | 0L;
 
-  // 找出「下一個整點」起 6 格的索引：本地小時 + 1，上限 23-5
+  // 時鐘未同步（NTP 失敗）時不得以未初始化時間推導索引
   struct tm tmLoc;
-  localTime(data->utcOffsetSec, &tmLoc);
-  int startH = tmLoc.tm_hour + 1;
-  if (startH > 18) startH = 18;  // 一日資料最多取到 18..23
-  for (int i = 0; i < 6; i++) {
-    int idx = startH + i;
+  if (!localTime(data->utcOffsetSec, &tmLoc)) {
+    LOGF("[fail] clock not synced, cannot index hourly\n");
+    return false;
+  }
+
+  // hourly.time 以 timezone=auto 對齊「當地今日午夜」，共 48 格。
+  // 當地小時 h 直接就是今日索引基準；下一個整點 = h+1，取樣點間隔 3h。
+  time_t localEpoch = time(nullptr) + data->utcOffsetSec;
+  int h = (int)((localEpoch % 86400) / 3600);
+  for (int i = 0; i < FORECAST_POINTS; i++) {
+    int idx = h + 1 + i * FORECAST_STEP_H;      // 最大 h=23 → idx_max=36 < 48
+    data->hours[i].hourLabel = idx % 24;
     data->hours[i].temp = doc["hourly"]["temperature_2m"][idx] | NAN;
     data->hours[i].precipProb = doc["hourly"]["precipitation_probability"][idx] | -1;
     data->hours[i].code = doc["hourly"]["weather_code"][idx] | -1;
   }
-  data->valid = !isnan(data->temp) && data->code >= 0;
-  return data->valid;
+
+  // 完整性核驗：任一欄位缺漏或無效即視為整份失敗，走 OFFLINE 路徑
+  if (isnan(data->temp) || data->humidity < 0 || data->windKmh < 0 ||
+      data->code < 0) {
+    LOGF("[fail] incomplete current fields\n");
+    return false;
+  }
+  for (int i = 0; i < FORECAST_POINTS; i++) {
+    const HourPoint& p = data->hours[i];
+    if (isnan(p.temp) || p.precipProb < 0 || p.code < 0) {
+      LOGF("[fail] incomplete hourly field at point %d\n", i);
+      return false;
+    }
+  }
+  data->valid = true;
+  return true;
 }
 
 void dumpWeather(const WeatherData& d) {
@@ -128,13 +149,9 @@ void dumpWeather(const WeatherData& d) {
   }
   LOGF("now: %.1fC rh=%d%% wind=%dkm/h code=%d offset=%lds\n",
        d.temp, d.humidity, d.windKmh, d.code, d.utcOffsetSec);
-  struct tm tmLoc;
-  localTime(d.utcOffsetSec, &tmLoc);
-  int startH = tmLoc.tm_hour + 1;
-  if (startH > 18) startH = 18;
-  for (int i = 0; i < 6; i++) {
-    LOGF("+%dh %02d:00 %.1fC rain=%d%% code=%d\n",
-         i + 1, (startH + i) % 24,
+  for (int i = 0; i < FORECAST_POINTS; i++) {
+    LOGF("point%d %02d:00 %.1fC rain=%d%% code=%d\n",
+         i + 1, d.hours[i].hourLabel,
          d.hours[i].temp, d.hours[i].precipProb, d.hours[i].code);
   }
 }

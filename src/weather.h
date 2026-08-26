@@ -15,7 +15,11 @@ bool syncClock(uint32_t timeoutMs);
 // 回傳 false 表示時鐘尚未同步。
 bool localTime(long utcOffsetSec, struct tm* out);
 
+#define FORECAST_POINTS 5   // 未來五個時間點，間隔三小時
+#define FORECAST_STEP_H 3
+
 struct HourPoint {
+  int hourLabel;  // 實際時刻（0-23），因間隔取樣非連續小時
   float temp;
   int precipProb;
   int code;
@@ -28,7 +32,7 @@ struct WeatherData {
   int windKmh;     // 風速 km/h
   int code;        // 目前 WMO 天氣碼
   long utcOffsetSec;
-  HourPoint hours[6];  // 下一個整點起 6 小時
+  HourPoint hours[FORECAST_POINTS];
 };
 
 // 抓取並解析指定地點天氣；失敗時 data->valid = false。

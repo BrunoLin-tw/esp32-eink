@@ -440,3 +440,35 @@ ArduinoJson 7.4.3、U8g2_for_Adafruit_GFX 1.8.0。
   未被 setFullWindow 重置前，dashboard 渲染會被塞進局部視窗。
   已修正並記錄於 commit 43e143c。
 - 大字溫度採 logisoso62_tn（僅純數字字集）＋°C 以 helvR18 接續繪製。
+
+### 深睡後白色區域暗灰條紋（2026-08-25 修復）
+
+- **症狀**：更新完成進入 deep sleep 後，畫面白色背景出現淺色暗灰條紋。
+- **根因**：顯示器控制線（CS/DC/RST/SCK/MOSI，GPIO 45/46/47/12/11）皆為
+  非 RTC 腳，ESP32-S3 深睡期間轉為高阻抗浮接；浮接準位經 controller
+  保護二極體形成寄生偏壓，在面板留下帶狀殘影。
+- **修復**：睡眠前將五條控制線固定 LOW（SCK 靜態無時脈邊緣，CS LOW
+  不會鎖入資料；全 LOW 也避免對未供電晶片背向供電），以 `gpio_hold_en`
+  ＋`gpio_deep_sleep_hold_en()` 鎖定至醒來（`uiSleepHoldPins()`）。
+- **衍生 bug**：hold 在喚醒後會持續生效直到明確解除——初版未解除，
+  按鍵喚醒時 RST 被鎖在低準位，controller 無法脫離 reset，
+  三次 `Busy Timeout!`。修復：每次 `uiPowerOnInit()` 先對五腳呼叫
+  `gpio_hold_dis()`＋`gpio_deep_sleep_hold_dis()` 再初始化 SPI/display。
+- **驗證**：入睡後白區無條紋；按鍵喚醒、awake 選單、切換地點、
+  刷新全部正常。
+
+### 可靠性修補（同日）
+
+1. NTP 未同步不再繼續流程：`syncClock()`/`localTime()` 失敗即走
+   OFFLINE＋短睡重試，杜絕以未初始化時間推導預報索引。
+2. 預報語意變更（需求）：由「下一個整點起連續 6 小時」改為
+   「未來五個時間點、間隔三小時」；API 改抓 `forecast_days=2`
+   （48 格，timezone=auto 對齊當地午夜），以當地 epoch 直接推導
+   跨日索引，移除晚間卡在 18:00–23:00 的舊鉗位邏輯。UI 下半改 5 格。
+3. JSON 完整性核驗：current 四項與五點 hourly 欄位任一缺漏/無效
+   即整份視為失敗，不再讓 UI 顯示負值或 NaN。
+4. 地點切換第二輪抓取失敗：改走 5 分短睡重試，與初始失敗策略一致；
+   NVS 僅在地點實際變更時寫入，減少 flash 磨損。
+5. RTC 快取最後成功看板（`RTC_DATA_ATTR`＋magic 防冷開機誤用）：
+   更新成功即快取；之後抓取失敗時重繪快取看板並疊底部
+   「OFFLINE - cached data」提示條，而非清屏只顯示 OFFLINE。

@@ -22,6 +22,15 @@ struct BtnDef {
 #define SLEEP_US_NORMAL (30ULL * 60ULL * 1000000ULL)
 #define SLEEP_US_RETRY  (5ULL  * 60ULL * 1000000ULL)
 
+// 最後成功看板的 RTC 快取：跨 deep sleep 存活；電源重置後 magic 歸零失效
+static RTC_DATA_ATTR WeatherData g_cache;
+static RTC_DATA_ATTR uint32_t g_cacheMagic = 0;
+#define CACHE_MAGIC 0xCACE0FEEu
+
+static bool cacheValid() {
+  return g_cacheMagic == CACHE_MAGIC && g_cache.valid;
+}
+
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
@@ -44,19 +53,26 @@ static void saveLocationIdx(int idx) {
   prefs.end();
 }
 
-static bool runUpdateCycle(int locIdx) {
+static bool runUpdateCycle(int locIdx, bool showOfflineOnFail = true) {
   const Location& loc = LOCATIONS[locIdx];
   if (!wifiConnect(15000)) {
-    uiShowOffline("wifi failed");
+    if (showOfflineOnFail) uiShowOffline("wifi failed");
     return false;
   }
-  syncClock(10000);
+  if (!syncClock(10000)) {
+    // 時鐘未同步會使預報索引無意義，視同更新失敗
+    if (showOfflineOnFail) uiShowOffline("time sync failed");
+    return false;
+  }
   WeatherData data;
   if (fetchWeather(loc.lat, loc.lon, &data)) {
     uiRenderDashboard(loc, data);
+    g_cache = data;             // 成功即更新 RTC 快取
+    g_cache.valid = true;
+    g_cacheMagic = CACHE_MAGIC;
     return true;
   }
-  uiShowOffline("fetch failed");
+  if (showOfflineOnFail) uiShowOffline("fetch failed");
   return false;
 }
 
@@ -69,6 +85,7 @@ static void goToDeepSleep(bool retryShort) {
   LOGF("sleeping %s\n", retryShort ? "5 min (retry)" : "30 min");
   uiHibernate();            // controller hibernate + GPIO7 低
   wifiOff();                // 射頻停用
+  uiSleepHoldPins();        // 控制線固定 LOW＋hold，避免深睡浮接
   // SD 未掛載；無需處理 GPIO42
   Serial.flush();
   delay(500);
@@ -140,25 +157,30 @@ void setup() {
   uiPowerOnInit();
   int idx = loadLocationIdx();
 
-  bool ok = runUpdateCycle(idx);
+  bool haveCache = cacheValid();
+  bool ok = runUpdateCycle(idx, !haveCache);
 
   if (!ok) {
+    // 有快取：重繪最後成功看板＋離線 badge；無快取維持整頁 OFFLINE
+    if (haveCache) {
+      uiRenderDashboard(LOCATIONS[idx], g_cache);
+      uiOfflineBadge();
+      LOGF("showing cached dashboard\n");
+    }
     goToDeepSleep(true);  // 失敗：5 分鐘後重試，不進 awake
     return;               // 不會到達，防禦性
   }
 
+  // 到此代表初始更新成功；awake 中若切換地點，第二輪失敗保留前次畫面＋badge
   if (btnWake) {
     int picked = awakeLoop(idx, 20000);
     if (picked != idx) {
-      saveLocationIdx(picked);
-      runUpdateCycle(picked);  // 確認新地點立即刷新
-    } else {
-      saveLocationIdx(idx);
+      saveLocationIdx(picked);  // NVS 僅在實際變更時寫入
+      ok = runUpdateCycle(picked, false);
+      if (!ok) uiOfflineBadge();
     }
-  } else {
-    saveLocationIdx(idx);
   }
-  goToDeepSleep(false);
+  goToDeepSleep(!ok);
 }
 
 void loop() {
