@@ -146,16 +146,6 @@ void uiAwakeHint(const char* name) {
   } while (display.nextPage());
 }
 
-void uiClearHint() {
-  int y0 = display.height() - 24;
-  display.setPartialWindow(0, y0, display.width(), 24);
-  display.firstPage();
-  do {
-    display.fillRect(0, y0, display.width(), 24, GxEPD_WHITE);
-    display.drawFastHLine(0, y0, display.width(), GxEPD_BLACK);
-  } while (display.nextPage());
-}
-
 void uiOfflineBadge() {
   int y0 = display.height() - 24;
   display.setPartialWindow(0, y0, display.width(), 24);

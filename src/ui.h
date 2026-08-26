@@ -18,9 +18,6 @@ void uiHibernate();
 // awake 模式提示條：partial refresh 顯示所選地點名與操作說明。
 void uiAwakeHint(const char* name);
 
-// 清除 awake 提示（partial refresh 恢復原狀）。
-void uiClearHint();
-
 // 離線提示條：疊在既有畫面底部（用於快取看板或保留前次畫面時）。
 void uiOfflineBadge();
 

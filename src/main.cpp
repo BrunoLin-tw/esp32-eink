@@ -102,6 +102,7 @@ static void goToDeepSleep(bool retryShort) {
 }
 
 // awake 模式：撥桿上下選地點、下壓確認；idleMs 無操作即返回。
+// 只回傳選擇結果；提示條的清除與畫面還原由呼叫端處理。
 static int awakeLoop(int curIdx, uint32_t idleTimeoutMs) {
   BtnDef awButtons[] = {
     {"UP", BTN_UP}, {"DOWN", BTN_DOWN}, {"PRESS", BTN_PRESS},
@@ -114,7 +115,6 @@ static int awakeLoop(int curIdx, uint32_t idleTimeoutMs) {
     uint32_t now = millis();
     if (now - lastAct > idleTimeoutMs) {
       LOGF("awake idle timeout\n");
-      uiClearHint();
       return curIdx;
     }
     if (now - debounceAt < 30) {
@@ -131,7 +131,7 @@ static int awakeLoop(int curIdx, uint32_t idleTimeoutMs) {
           lastAct = millis();
           if (i == 0) curIdx = (curIdx + 1) % LOCATION_COUNT;
           else if (i == 1) curIdx = (curIdx + LOCATION_COUNT - 1) % LOCATION_COUNT;
-          else { uiClearHint(); return curIdx; }
+          else return curIdx;
           LOGF("select -> %s\n", LOCATIONS[curIdx].name);
           uiAwakeHint(LOCATIONS[curIdx].name);
         }
@@ -171,13 +171,16 @@ void setup() {
     return;               // 不會到達，防禦性
   }
 
-  // 到此代表初始更新成功；awake 中若切換地點，第二輪失敗保留前次畫面＋badge
+  // 到此代表初始更新成功（快取必然有效）；awake 退出後一律還原完整畫面
   if (btnWake) {
     int picked = awakeLoop(idx, 20000);
     if (picked != idx) {
       saveLocationIdx(picked);  // NVS 僅在實際變更時寫入
       ok = runUpdateCycle(picked, false);
       if (!ok) uiOfflineBadge();
+    } else {
+      // 同地點確認／idle 逾時：提示條曾覆蓋底部預報，用快取重繪還原
+      uiRenderDashboard(LOCATIONS[picked], g_cache);
     }
   }
   goToDeepSleep(!ok);
