@@ -9,68 +9,85 @@
 - 顯示器：792x272、黑白電子紙、雙 `SSD1683`
 - 裝置沒有觸控與背光
 
-## 開發方向
-
-本專案規劃的標準開發路徑是 **PlatformIO + Arduino framework + GxEPD2**，面板 class 固定使用 `GxEPD2_579_GDEY0579T93`。GxEPD2 自 1.5.9 起支援此 class；裝置研究已對照 1.6.9，但編譯與實機驗證仍待完成。
-
-ELECROW 官方 Arduino driver 主要作為硬體與參考資料來源，用於核對腳位、控制流程、原廠範例及初步硬體驗證，不作為正式應用程式的預設基礎。
-
 ## 專案狀態
 
-目前專案只有文件。`platformio.ini`、原始碼與自動化測試都尚未建立；編譯、燒錄及上傳驗證也尚未完成。
+| 階段 | 狀態 |
+| --- | --- |
+| Bring-up（編譯/上傳/serial/全刷/局部刷新/sleep-wake＋按鍵、microSD、Wi-Fi 掃描） | 完成，標籤 `bringup-v1` |
+| 天氣看板 v1（四地點 Open-Meteo、30 分睡眠週期、撥桿切換地點） | 完成 |
+| 實機量測紀錄 | 見 [device-research.md](docs/device-research.md) 的量測章節 |
+
+目前韌體即天氣看板；bring-up 測試韌體保留在 git 歷史（標籤 `bringup-v1`）。
+
+## 工具鏈與依賴（已固定版本）
+
+PlatformIO + Arduino framework。`platformio.ini` 已 pin：
+
+- `espressif32@7.0.1`（Arduino core ESP32 2.0.17）
+- `zinggjm/GxEPD2@1.6.9`（面板 class `GxEPD2_579_GDEY0579T93`）
+- `bblanchon/ArduinoJson@7.4.3`
+- `olikraus/U8g2_for_Adafruit_GFX@1.8.0`
+
+Board 設定：`esp32-s3-devkitc-1` 相容定義、8 MB Flash、`qio_opi` PSRAM、涵蓋完整 8 MiB 的 partition layout。
 
 ## 快速開始
 
-目前尚無可直接執行的 PlatformIO 工程。後續開始 bring-up 時：
+1. 安裝 PlatformIO（VS Code extension 或 PlatformIO Core）。
+2. 填入 Wi-Fi 憑證（此檔已被 `.gitignore` 排除，不得 commit）：
 
-1. 安裝 PlatformIO，可使用 VS Code extension 或 PlatformIO Core。
-2. 使用可傳輸資料的 USB-C 線連接裝置；連線會經過板上的 CH340C USB-to-UART bridge。
-3. 確認 serial device：Linux 通常是 `/dev/ttyUSB*`，macOS 通常是 `/dev/cu.usbserial-*`，Windows 則是 `COM` 編號。若沒有出現，先檢查線材、供電、系統裝置清單與 CH340 driver。
-4. 初始化工程時，PlatformIO 應選用相容的 ESP32-S3 board definition、Arduino framework、8 MB Flash 與 OPI PSRAM。由於 serial port 使用 CH340C UART，需停用原生 USB CDC-on-boot；partition 應選用並驗證涵蓋 8 MiB 的 layout，或使用 custom CSV，不可直接照抄官方只映射 4 MiB 的 `Huge APP`。完成後先進行最小化編譯及 upload 驗證。
+   ```sh
+   cp src/secrets.h.example src/secrets.h
+   # 編輯 src/secrets.h 填入 WIFI_SSID / WIFI_PASS
+   ```
 
-若無法自動進入下載模式，請按住 `BOOT`，按下再放開 `RESET`，接著放開 `BOOT`，然後重新 upload。
+3. 使用可傳輸資料的 USB-C 線連接裝置（經板上 CH340C）。Linux 需將使用者加入 `dialout` 群組並重新登入。
+4. 編譯、上傳、監看：
 
-## 常用命令
+   ```sh
+   pio run
+   pio run -t upload
+   pio device monitor -b 115200
+   ```
 
-以下命令只適用於 PlatformIO 工程建立完成之後：
+Upload speed 預設 `460800`；若燒錄不穩再降 `115200`。無法自動進入下載模式時：按住 `BOOT` → 點按 `RESET` → 放開 `RESET` → 放開 `BOOT` → 重試上傳。
 
-```sh
-pio run
-pio run -t upload
-pio device monitor -b 115200
+## 目錄結構（現況）
+
+```text
+esp32-eink/
+├── platformio.ini          # 工程設定（版本已固定）
+├── src/
+│   ├── main.cpp            # 狀態機、sleep/wake、NVS 地點記憶
+│   ├── weather.h/.cpp      # Wi-Fi、NTP、Open-Meteo 抓取與解析
+│   ├── ui.h/.cpp           # 版面渲染（U8g2 字型）
+│   ├── icons.h/.cpp        # WMO 天氣碼映射與圖示繪製
+│   ├── icons_bitmaps.h     # 圖示點陣（由 tools/gen_icons.py 產生）
+│   ├── locations.h         # 四地點表
+│   ├── log.h               # 時間戳 LOGF
+│   └── secrets.h.example   # Wi-Fi 憑證範本（secrets.h 不入庫）
+├── tools/gen_icons.py      # 圖示產生器（Pillow）
+├── docs/                   # 研究、規格、計畫、應用候選
+├── README.md
+└── AGENTS.md               # 代理人作業規則
 ```
-
-初次 upload speed 建議設為 `460800`；若燒錄不穩，再降為 `115200`。
 
 ## 開發時先知道
 
 - 此型號沒有觸控與背光，不能套用 touch controller、觸控校正或 backlight GPIO 的設定。
 - 顯示器由雙 `SSD1683` 驅動；可見畫面是 792x272，但 ELECROW 官方 driver 使用 800x272 內部 framebuffer，兩者不能直接互換。
-- 電子紙刷新較慢，快速或局部刷新可能產生 ghosting；實際策略必須依面板、內容與溫度驗證。
+- GxEPD2 的 partial 視窗狀態會殘留：`setPartialWindow()` 之後渲染整頁前必須先 `setFullWindow()`。
 - USB-C 經 CH340C 連到 UART，不是 ESP32-S3 原生 USB。
-- 電池只能使用具保護電路的 1S 3.7 V LiPo／Li-ion；接線前要量測並確認極性，不得假設主板有完整 cell protection 或可讀取電池電壓的 ADC。
-- 目前沒有實機硬體驗證；在完成編譯、上傳、serial log 與顯示測試前，不應宣稱硬體流程可用。
-
-## 預計目錄結構
-
-以下是後續初始化工程時的規劃，不代表這些檔案與目錄目前已存在：
-
-```text
-esp32-eink/
-├── platformio.ini
-├── src/
-├── include/
-├── test/
-├── docs/
-├── README.md
-└── AGENTS.md
-```
+- 電池只能使用具保護電路的 1S 3.7 V LiPo／Li-ion；接線前要量測並確認極性，不得假設主板有完整 cell protection 或可讀取電池電壓的 ADC。目前仍以 USB 供電，電池尚未接入。
 
 ## 文件
 
-- [完整裝置研究](docs/device-research.md)
+- [完整裝置研究](docs/device-research.md)——硬體事實、framebuffer、刷新流程與實機量測
 - [代理人開發規則](AGENTS.md)
-- [文件設計規格](docs/superpowers/specs/2026-08-19-device-documentation-design.md)
+- [後續應用候選](docs/app-ideas.md)
+- 規格與計畫：
+  - [文件設計規格](docs/superpowers/specs/2026-08-19-device-documentation-design.md)
+  - [Bring-up 驗證設計](docs/superpowers/specs/2026-08-24-bringup-verification-design.md)／[計畫](docs/superpowers/plans/2026-08-24-bringup-verification.md)
+  - [天氣看板設計](docs/superpowers/specs/2026-08-25-weather-station-design.md)／[計畫](docs/superpowers/plans/2026-08-25-weather-station.md)
 
 ## 資料來源
 

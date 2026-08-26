@@ -1,5 +1,7 @@
 # Bring-up 驗證韌體實作計畫
 
+> **執行狀態（2026-08-24 補記）：本計畫已全部執行完畢並合併**（commit `3caf13f`..`054dc07`，標籤 `bringup-v1`）。checkbox 未逐項回填；實際執行與計畫的偏離事項見各 commit 紀錄與 `docs/device-research.md` 量測章節。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 建立 PlatformIO 工程與單檔 serial 選單測試韌體，在實機上完成 display／partial／buttons／SD／Wi-Fi／sleep 全套週邊驗證並記錄數據。

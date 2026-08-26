@@ -1,5 +1,7 @@
 # 天氣看板實作計畫
 
+> **執行狀態（2026-08-25 補記）：本計畫已全部執行完畢並合併**（commit `9fc001b`..`7ff484a`）。checkbox 未逐項回填；執行中另有兩次使用者追加的設計修訂（點陣圖示取代幾何繪製、U8g2 比例字型升級），偏離事項見各 commit 紀錄與 `docs/device-research.md` 量測章節。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在已驗證的硬體上建立四地點 Open-Meteo 天氣看板：30 分鐘睡眠週期自動更新、撥桿切換地點、離線短睡眠重試。

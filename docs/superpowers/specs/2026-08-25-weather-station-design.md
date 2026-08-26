@@ -74,12 +74,21 @@
 └──────────────────────────────────────────────────────────┘
 ```
 
-- 圖示：64x64 1bpp 點陣，PROGMEM 位元陣列；依 WMO weather_code 映射：
-  晴(0)、多雲(1-2)、陰(3)、霧(45,48)、毛雨(51-57)、雨(61-67)、
-  雪(71-77)、陣雨(80-82)、雪陣雨(85-86)、雷雨(95,96,99)，約 10 張。
-- 文字：Adafruit GFX 內建點陣字放大；溫度大字 size 4–6。
+- 圖示（最終決策，2026-08-25）：PROGMEM 1bpp 點陣，64px 與 32px 兩套，
+  由 `tools/gen_icons.py`（Pillow）產生至 `src/icons_bitmaps.h`；
+  依 WMO weather_code 映射：晴(0)、多雲(1-2)、陰(3)、霧(45,48)、
+  毛雨(51-57)、雨(61-67)、雪(71-77)、陣雨(80-82)、雪陣雨(85-86)、
+  雷雨(95,96,99)，共 10 種。調整樣式須改產生器腳本後重跑。
+- 文字（最終決策，2026-08-25）：U8g2 比例字型
+  （`U8g2_for_Adafruit_GFX@1.8.0`），經基線座標繪製於 GFX 畫布。
+  配置：地點 `helvB24_tf`、日期時間 `helvR18_tf`、大字溫度
+  `logisoso62_tn`（純數字）＋°C 以 `helvR18_tf` 接續繪製、
+  RH/Wind 列與離線畫面說明 `helvR14_tf`、六格時間 `helvR14_tf`
+  ／數值 `helvB14_tf`、awake 提示條 `helvR12_tf`。
 - 刷新策略：每次喚醒更新走 full refresh（實測 4415 ms 可接受，
   30 分鐘才一次）；awake 模式中的地點名提示用 partial refresh。
+  注意：GxEPD2 的 partial 視窗狀態會殘留，渲染整頁前必須先
+  `setFullWindow()`。
 
 ## 憑證
 
@@ -124,3 +133,11 @@
 ## 已定事項補記
 
 - ArduinoJson pinned 版本（首次編譯成功後核對）：`bblanchon/ArduinoJson@7.4.3`。
+- U8g2 字型引擎 pinned 版本：`olikraus/U8g2_for_Adafruit_GFX@1.8.0`。
+- 圖示方案決策歷程：
+  1. 原案：PROGMEM 手寫點陣（本文件初版）。
+  2. 計畫修訂：改幾何繪製（省 flash、免轉檔工具）。
+  3. 實作回饋：幾何繪製品質不足，最終採 **`tools/gen_icons.py`
+     產生之 PROGMEM 點陣**（64px＋32px 兩套），commit `d36c103`。
+  最終狀態以本文件「版面」章節與 `src/icons_bitmaps.h` 為準；
+  產生器腳本入庫，樣式調整一律經由腳本重跑。
