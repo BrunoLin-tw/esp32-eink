@@ -175,7 +175,8 @@ void setup() {
     uiShowMessage("NO SD", "insert card with /raw_photos");
     photoEnd();
     uiHibernate();
-    goToDeepSleep(SLEEP_US_RETRY, !stuckGuard && !anyWakePinLow());
+    // spec：失敗路徑本輪停用 timer，只留按鍵喚醒（卡鍵時才退 timer-only）
+    goToDeepSleep(stuckGuard ? SLEEP_US_RETRY : 0, !stuckGuard && !anyWakePinLow());
     return;
   }
   int n = photoScan();
@@ -222,8 +223,17 @@ void setup() {
   photoEnd();
   saveIdx(shown);
   uiHibernate();
-  // 卡鍵：本輪 5 分鐘 timer-only（無 EXT1），下輪再試；正常路徑 timer 由 T7 接上
-  goToDeepSleep(stuckGuard ? SLEEP_US_RETRY : 0, !stuckGuard && !anyWakePinLow());
+  // 依 NVS slide 掛 timer：OFF 或無照片一律不掛（只留三鍵 EXT1）
+  int slideIdx = loadSlideIdx();
+  uint64_t timerUs = 0;
+  if (SLIDE_OPTIONS_SEC[slideIdx] > 0 && g_photoCount > 0) {
+    timerUs = (uint64_t)SLIDE_OPTIONS_SEC[slideIdx] * 1000000ULL;
+  }
+  // 卡鍵：本輪 5 分鐘 timer-only（無 EXT1），下輪再試
+  if (stuckGuard) {
+    timerUs = SLEEP_US_RETRY;
+  }
+  goToDeepSleep(timerUs, !stuckGuard && !anyWakePinLow());
 }
 
 void loop() {
