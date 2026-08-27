@@ -18,3 +18,5 @@ config/credentials/*
 .DS_Store
 __pycache__/
 *.pyc
+# 本機測試圖片（不入庫）
+raw_photos/

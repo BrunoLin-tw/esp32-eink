@@ -50,7 +50,7 @@ python3 -m venv /tmp/opencode/pio-venv
 ```
 
 - `pio` 二進位路徑：`/tmp/opencode/pio-venv/bin/pio`（本專案文件與慣例均以此完整路徑呼叫）
-- `pillow` 供圖示產生器 `tools/gen_icons.py` 使用
+- `pillow` 供轉檔工具 `tools/raw_convert.py` 使用
 
 ### 首次編譯
 
@@ -84,6 +84,53 @@ python3 -m venv /tmp/opencode/pio-venv
 操作：撥桿**上／下**翻頁、**下壓**進選單設定輪播間隔（OFF/1/5/15/30 分，存 NVS）。
 
 Upload speed 預設 `460800`；若燒錄不穩再降 `115200`。無法自動進入下載模式時：按住 `BOOT` → 點按 `RESET` → 放開 `RESET` → 放開 `BOOT` → 重試上傳。
+
+## RAW 轉檔工具用法（`tools/raw_convert.py`）
+
+將 JPG/PNG 轉成裝置可顯示的 `.raw`（792x272、1bpp 黑白、Floyd–Steinberg 抖動）。
+
+### 基本轉檔
+
+```sh
+/tmp/opencode/pio-venv/bin/python tools/raw_convert.py 圖片.png --out 輸出資料夾
+```
+
+輸出檔名＝輸入 basename 加 `.raw` 副檔名（`圖片.png` → `圖片.raw`）。
+
+### 參數
+
+| 參數 | 說明 |
+| --- | --- |
+| `--mode contain`（預設） | 等比縮放完整放入畫面，上下/左右置中留白 |
+| `--mode cover` | 等比放大蓋滿後中央裁切（畫面飽滿但裁邊） |
+| `--force` | 輸出檔已存在時覆寫（預設拒絕，避免誤覆） |
+| `--selftest` | 產生測試樣本組（漸層/格線/標字/純白/純黑 × contain/cover） |
+
+批次：一次列出多個輸入檔即可（不遞迴）：
+
+```sh
+/tmp/opencode/pio-venv/bin/python tools/raw_convert.py a.png b.jpg c.png --out 輸出資料夾
+```
+
+### 注意事項
+
+- 支援 `.png`／`.jpg`／`.jpeg`（大小寫不敏感）；批次會跳過非一般檔案與
+  不接受之副檔名
+- EXIF 旋轉資訊自動轉正；RGBA 透明區自動合成白底
+- 檔名建議數字前綴（`001_xxx.raw`）控制播放順序（韌體按字典序排列）
+- 轉出的 `.raw` **必須恰好 26,940 bytes**（12B 檔頭＋26,928 B 點陣）；
+  不符表示轉檔失敗，韌體會視為壞檔跳過
+- 畫面比例 2.91:1（792x272）：接近此比例的橫圖效果最好；直式圖用
+  `contain` 會留白縮小、`cover` 會裁切
+
+### 完整流程範例
+
+```sh
+mkdir -p /tmp/opencode/photos
+/tmp/opencode/pio-venv/bin/python tools/raw_convert.py 全家福.png 風景.jpg --out /tmp/opencode/photos
+ls -l /tmp/opencode/photos/*.raw    # 確認 26940 bytes
+# 複製到 SD 卡 /raw_photos/ 後插卡即可瀏覽
+```
 
 ## 目錄結構（現況）
 
