@@ -14,6 +14,11 @@
 #define WAIT_RELEASE_MS 2000
 #define SLEEP_US_RETRY  (5ULL * 60ULL * 1000000ULL)
 
+// 輪播間隔（秒）；與 ui.cpp MENU_OPTIONS 順序對應
+static const uint32_t SLIDE_OPTIONS_SEC[] = {0, 60, 300, 900, 1800};
+static const int SLIDE_OPTIONS_COUNT = 5;
+static const uint32_t SLIDE_DEFAULT_SEC = 0;   // 預設 OFF
+
 static esp_sleep_wakeup_cause_t g_wake;
 static uint64_t g_wakeMask = 0;
 static bool stuckGuard = false;
@@ -32,6 +37,62 @@ static void saveIdx(int v) {
   prefs.begin("photo", false);
   prefs.putInt("idx", v);
   prefs.end();
+}
+
+static int loadSlideIdx() {
+  Preferences prefs;
+  prefs.begin("photo", true);
+  uint32_t sec = prefs.getUInt("slide", SLIDE_DEFAULT_SEC);
+  prefs.end();
+  for (int i = 0; i < SLIDE_OPTIONS_COUNT; i++) {
+    if (SLIDE_OPTIONS_SEC[i] == sec) return i;
+  }
+  return 0;
+}
+
+static void saveSlideIdx(int v) {
+  Preferences prefs;
+  prefs.begin("photo", false);
+  prefs.putUInt("slide", SLIDE_OPTIONS_SEC[v]);
+  prefs.end();
+}
+
+// 選單互動：回傳確認的游標；PRESS 或 idle 20s 皆保存（語意相同）
+static int menuLoop(int cur) {
+  uiMenuScreen(cur);
+  uint32_t lastAct = millis();
+  uint32_t debounceAt = 0;
+  bool last[2] = {true, true};   // UP, DOWN
+  while (true) {
+    uint32_t now = millis();
+    if (now - lastAct > 20000) {
+      LOGF("menu idle, save cursor %d\n", cur);
+      return cur;
+    }
+    if (now - debounceAt < 30) { delay(5); yield(); continue; }
+    debounceAt = now;
+    if (!digitalRead(BTN_PRESS)) {
+      LOGF("menu confirm %d\n", cur);
+      return cur;
+    }
+    for (int i = 0; i < 2; i++) {
+      uint8_t pin = (i == 0) ? BTN_UP : BTN_DOWN;
+      bool released = digitalRead(pin);
+      if (released != last[i]) {
+        last[i] = released;
+        if (!released) {
+          lastAct = millis();
+          cur = (i == 0) ? (cur + SLIDE_OPTIONS_COUNT - 1) % SLIDE_OPTIONS_COUNT   // UP=往上
+                         : (cur + 1) % SLIDE_OPTIONS_COUNT;                        // DOWN=往下
+          uiMenuScreen(cur);   // 整頁重繪（partial 在此面板有對齊問題，改 full refresh）
+          LOGF("menu cursor %d (%lu s)\n", cur,
+               (unsigned long)SLIDE_OPTIONS_SEC[cur]);
+        }
+      }
+    }
+    delay(5);
+    yield();
+  }
 }
 
 // ---------- 喚醒與睡眠 ----------
@@ -140,9 +201,26 @@ void setup() {
     return;
   }
   uiShowPhoto();
+  LOGF("shown photo %d (%s)\n", shown, photoName(shown));
+
+  // PRESS 喚醒：直接進設定選單（不先重刷同一張照片）；SD 仍掛載以利還原
+  if (g_wake == ESP_SLEEP_WAKEUP_EXT1 && (g_wakeMask & (1ULL << BTN_PRESS))) {
+    waitButtonsReleased(WAIT_RELEASE_MS);       // 確認前釋放下壓
+    int cur = loadSlideIdx();
+    int picked = menuLoop(cur);
+    if (picked != cur) saveSlideIdx(picked);    // 僅變更時寫入
+    if (photoLoad(shown) != 0) {                // 內容被選單覆蓋，重讀原圖
+      uiShowMessage("LOAD FAIL", "photo invalid");
+      photoEnd();
+      uiHibernate();
+      goToDeepSleep(stuckGuard ? SLEEP_US_RETRY : 0, !stuckGuard && !anyWakePinLow());
+      return;
+    }
+    uiShowPhoto();                              // 照片還原（第 2 次內容 full refresh）
+    LOGF("menu done, slideshow idx=%d\n", picked);
+  }
   photoEnd();
   saveIdx(shown);
-  LOGF("shown photo %d (%s)\n", shown, photoName(shown));
   uiHibernate();
   // 卡鍵：本輪 5 分鐘 timer-only（無 EXT1），下輪再試；正常路徑 timer 由 T7 接上
   goToDeepSleep(stuckGuard ? SLEEP_US_RETRY : 0, !stuckGuard && !anyWakePinLow());

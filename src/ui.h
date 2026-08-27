@@ -11,10 +11,8 @@ void uiShowPhoto();
 void uiShowMessage(const char* title, const char* detail);
 
 // 設定選單：title 為「SLIDESHOW」，options 為 OFF/1/5/15/30 MIN 字串陣列。
+// 游標變更時整頁重繪（此面板 partial 視窗有對齊問題，選單採 full refresh）。
 void uiMenuScreen(int cursor);
-
-// 選單選項列 partial 更新（上下移動游標時呼叫）。
-void uiMenuUpdate(int cursor);
 
 // hibernate + GPIO7 低。
 void uiHibernate();

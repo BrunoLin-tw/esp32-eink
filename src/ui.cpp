@@ -91,21 +91,6 @@ void uiMenuScreen(int cursor) {
   } while (display.nextPage());
 }
 
-void uiMenuUpdate(int cursor) {
-  int y0 = 116;  // 選項列區域
-  display.setPartialWindow(40, y0, 400, 5 * 26 + 6);
-  display.firstPage();
-  do {
-    display.fillRect(40, y0, 400, 5 * 26 + 6, GxEPD_WHITE);
-    for (int i = 0; i < MENU_COUNT; i++) {
-      char line[32];
-      snprintf(line, sizeof(line), "%s  %s", i == cursor ? ">" : " ",
-               MENU_OPTIONS[i]);
-      drawText(60, y0 + 10 + i * 26, F_BODY, line);
-    }
-  } while (display.nextPage());
-}
-
 void uiHibernate() {
   if (initialized) {
     display.hibernate();
