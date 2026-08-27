@@ -500,3 +500,34 @@ ArduinoJson 7.4.3、U8g2_for_Adafruit_GFX 1.8.0。
   `uiClearHint()` 移除。
 - **驗證**：同地點確認、idle 逾時、跨地點切換三條路徑的底部內容
   皆完整還原。
+
+## SD 相框應用量測（2026-08-26）
+
+量測方法：SD 相框韌體 serial log（見
+`docs/superpowers/specs/2026-08-26-photo-frame-design.md`），時間戳
+取自 `millis()`；卡為 FAT32、`/raw_photos/` 內 15–22 張 RAW。
+
+| 項目 | 結果 |
+| --- | --- |
+| display init | 22 ms |
+| SD mount＋掃描＋排序（15–22 張） | 約 500–550 ms |
+| RAW 讀入（26,928 B，單檔） | 約 100–150 ms |
+| full refresh 渲染 | 約 4.4 s（兩顆 SSD1683 各 `_Update_Full` 約 1740 ms） |
+| 翻頁總耗時（喚醒→畫面完成） | 典型約 5 s（目標 ≤6 s、驗收 ≤8 s 內） |
+| 翻頁循環（雙向＋邊界） | 通過 |
+| 三鍵喚醒分流＋優先序 | 通過（EXT1 status 暫存器分流） |
+| 卡鍵防護 | 通過：stuck 偵測→執行一次動作→5 分 timer-only 睡眠，喚醒後自動恢復 |
+| 選單＋NVS（間隔跨 reset） | 通過；游標更新採整頁重繪（partial 視窗在此面板有座標對齊問題） |
+| 輪播自動推進（1 分鐘檔） | 通過；OFF／失敗路徑不掛 timer |
+| ≥20 次連續 sleep/wake | 通過（無 Busy Timeout、無殘留事件） |
+| 讀取中拔卡／掃描中拔卡 | 通過：無 crash、走錯誤畫面、GPIO42 全路徑為 low |
+| header 各欄位錯誤（7 種壞檔） | 逐一跳過、不 crash |
+
+異常事件：
+- IDF 4.4 `esp_sleep_disable_wakeup_source()` 在開機後 s_config 歸零
+  時呼叫會報「Incorrect wakeup source」且不清 RTC 殘留：改以
+  「零遮罩覆寫 EXT1」清除（timer 一次性無殘留）。
+- 卡鍵路徑曾因 timer=0 且無 EXT1 而永久睡眠：stuck 時一律改用
+  5 分鐘 timer-only 睡眠。
+- 選單 partial 視窗在雙 controller 面板出現座標錯位（選項與頁腳
+  被裁切）：改整頁重繪；效能成本約 4.4 s/次，屬低頻操作可接受。
