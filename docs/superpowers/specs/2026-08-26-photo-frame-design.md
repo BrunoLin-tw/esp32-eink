@@ -125,7 +125,10 @@
         → hibernate → 控制線 hold → 深睡
 設定選單（PRESS 進入）：
   - 全屏文字頁：輪播間隔 OFF/1/5/15/30 分
-  - 撥桿上下循環選項（partial 快速更新選項列）、下壓確認存 NVS；
+  - 撥桿上下循環選項、下壓確認存 NVS；
+    （實作註記：游標更新改 **整頁重繪（full refresh）**，因 dual-controller
+    partial window 座標對齊風險；每次游標移動 ≈4.4 s，選單往返成本
+    由 2 次內容 full refresh 增為「2＋游標移動次數」次）
     idle 20 s 逾時：保存當前游標選項，語意等同 PRESS 確認
   - slide 僅在值與原值不同時寫入
   - 退出後：從 SD 重讀原圖重繪（內容已被選單覆蓋）→ 深睡

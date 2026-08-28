@@ -157,6 +157,7 @@ static int computeIndex(int cur, int count) {
 void setup() {
   Serial.begin(115200);
   delay(500);
+  uint32_t tBoot0 = millis();
   g_wake = esp_sleep_get_wakeup_cause();
   g_wakeMask = esp_sleep_get_ext1_wakeup_status();
   LOGF("boot wake=%d mask=%llu\n", (int)g_wake, (unsigned long long)g_wakeMask);
@@ -171,6 +172,7 @@ void setup() {
   if (stuckGuard) LOGF("[warn] stuck button detected\n");
 
   uiPowerOnInit();
+  LOGF("boot+display init %lu ms\n", (unsigned long)(millis() - tBoot0));
   if (!photoBegin()) {
     uiShowMessage("NO SD", "insert card with /raw_photos");
     photoEnd();
@@ -180,6 +182,7 @@ void setup() {
     return;
   }
   int n = photoScan();
+  LOGF("mount+scan+sort %lu ms (%d files)\n", (unsigned long)(millis() - tBoot0), n);
   if (n <= 0) {
     const char* t = (n == -2) ? "TOO MANY PHOTOS" : "NO PHOTOS";
     uiShowMessage(t, "fix card /raw_photos");
@@ -188,7 +191,8 @@ void setup() {
     goToDeepSleep(stuckGuard ? SLEEP_US_RETRY : 0, !stuckGuard && !anyWakePinLow());
     return;
   }
-  int idx = computeIndex(loadIdx(), n);
+  int prevIdx = loadIdx();
+  int idx = computeIndex(prevIdx, n);
   int shown = -1;
   for (int attempt = 0; attempt < n; attempt++) {
     int cand = (idx + attempt) % n;                  // 只向前、最多一圈
@@ -201,7 +205,9 @@ void setup() {
     goToDeepSleep(stuckGuard ? SLEEP_US_RETRY : 0, !stuckGuard && !anyWakePinLow());
     return;
   }
+  LOGF("read %lu ms\n", (unsigned long)(millis() - tBoot0));
   uiShowPhoto();
+  LOGF("render+total %lu ms\n", (unsigned long)(millis() - tBoot0));
   LOGF("shown photo %d (%s)\n", shown, photoName(shown));
 
   // PRESS 喚醒：直接進設定選單（不先重刷同一張照片）；SD 仍掛載以利還原
@@ -221,7 +227,7 @@ void setup() {
     LOGF("menu done, slideshow idx=%d\n", picked);
   }
   photoEnd();
-  saveIdx(shown);
+  if (shown != prevIdx) saveIdx(shown);   // 僅變更時寫入（降 flash 磨損）
   uiHibernate();
   // 依 NVS slide 掛 timer：OFF 或無照片一律不掛（只留三鍵 EXT1）
   int slideIdx = loadSlideIdx();
