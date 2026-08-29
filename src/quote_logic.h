@@ -291,6 +291,7 @@ inline uint32_t atLocalTime(uint32_t utcNow, int dayOffset, int hh, int minute) 
   return static_cast<uint32_t>(days * 86400 + hh * 3600 + minute * 60 - TZ_TW);
 }
 
+// 僅限 now < 09:00（PRE_MARKET）使用；誤用於 09:00 後會回傳過去時刻
 inline uint32_t todayAt9(uint32_t utcNow) { return atLocalTime(utcNow, 0, 9, 0); }
 inline uint32_t nextDayAt9(uint32_t utcNow) { return atLocalTime(utcNow, 1, 9, 0); }
 
@@ -328,6 +329,10 @@ struct QuoteRecord {
   char lastCloseDate[9];  // 收盤定格旗標（""=未定格）
   uint32_t savedEpoch;    // 最後持久化時間（UTC）
 };
+
+// blob layout 防漂移：欄位變動時這裡會編譯失敗，須同步遞增 BLOB_VERSION
+static_assert(sizeof(QuoteRow) == 48, "QuoteRow layout changed; bump BLOB_VERSION");
+static_assert(sizeof(QuoteRecord) == 280, "QuoteRecord layout changed; bump BLOB_VERSION");
 
 inline bool recordSane(const QuoteRecord& r) {
   if (r.version != BLOB_VERSION) return false;
