@@ -1601,7 +1601,6 @@ display.setRotation(1) 統一旋轉（僅此一處；圖元全經 GFX 邏輯
 
 ```cpp
 #include <Arduino.h>
-#include <Preferences.h>
 #include <esp_sleep.h>
 #include <time.h>
 #include "driver/rtc_io.h"
@@ -1618,7 +1617,6 @@ display.setRotation(1) 統一旋轉（僅此一處；圖元全經 GFX 邏輯
 #define BTN_PRESS 5
 
 #define WAIT_RELEASE_MS 2000
-#define SLEEP_US_RETRY  (5ULL * 60ULL * 1000000ULL)
 
 static esp_sleep_wakeup_cause_t g_wake;
 static uint32_t g_wakeMask = 0;
@@ -1722,7 +1720,16 @@ static void finalizeClose(const qlogic::MarketBatch& mb, const char* today,
 // ---------- 睡眠 ----------
 static void goToDeepSleep(uint32_t targetUtc, bool enableExt1) {
   uint32_t now = (uint32_t)time(nullptr);
-  uint32_t delta = qlogic::capSleep(now, targetUtc);
+  uint32_t delta;
+  if (stuckGuard) {
+    // 卡鍵（spec R4）：一律 5 分鐘 timer-only——停用 EXT1 且覆寫狀態路徑
+    // 目標，避免 Weekend/PostClose 長睡讓板子長時間不可達
+    delta = 300;
+    enableExt1 = false;
+    LOGF("[warn] stuck: 5 min timer-only retry\n");
+  } else {
+    delta = qlogic::capSleep(now, targetUtc);
+  }
   uint64_t us = (uint64_t)delta * 1000000ULL;
   uiHibernate();
   uiSleepHoldPins();

@@ -1,53 +1,375 @@
 #include <Arduino.h>
+#include <Preferences.h>
+#include <esp_sleep.h>
 #include <time.h>
+#include "driver/rtc_io.h"
 #include "log.h"
-#include "ui.h"
+#include "quote_logic.h"
 #include "quote_store.h"
+#include "ui.h"
 #include "watchlist.h"
+
+// 按鍵（active-low，docs/device-research.md）；v1 僅 MENU 有功能
+#define BTN_MENU 2
+#define BTN_UP   6
+#define BTN_DOWN 4
+#define BTN_PRESS 5
+
+#define WAIT_RELEASE_MS 2000
+
+static esp_sleep_wakeup_cause_t g_wake;
+static uint32_t g_wakeMask = 0;
+static bool stuckGuard = false;
+
+// ---------- NVS ----------（快取載入於 quote_store；此處僅讀取輔助）
+static bool loadCache(qlogic::QuoteRecord* rec) {
+  return quoteRecordLoad(rec);
+}
+
+// ---------- 視圖組裝 ----------
+static void viewFromRecord(QuoteView* v, const qlogic::QuoteRecord& rec,
+                           const char* timeStr, const char* status) {
+  for (int i = 0; i < WATCH_N; i++) {
+    v->names[i] = WATCHLIST[i].name;
+    v->z[i] = rec.rows[i].z;
+    qlogic::QuoteCalc c = qlogic::calcQuote(rec.rows[i].z, rec.rows[i].y);
+    v->chg[i] = c.chg;
+    v->pct[i] = c.pct;
+  }
+  qlogic::formatDateTW(rec.quoteDate, v->dateStr, sizeof v->dateStr);
+  strncpy(v->timeStr, timeStr, sizeof v->timeStr - 1);
+  v->timeStr[sizeof v->timeStr - 1] = '\0';
+  v->status = status;
+}
+
+static void viewFromBatch(QuoteView* v, const qlogic::MarketBatch& mb,
+                          const char* timeStr, const char* status) {
+  qlogic::QuoteRecord rec = {};
+  rec.version = qlogic::BLOB_VERSION;
+  for (int i = 0; i < WATCH_N; i++) rec.rows[i] = mb.rows[i];
+  strcpy(rec.quoteDate, mb.date);
+  strcpy(rec.quoteTime, mb.quoteTime);
+  viewFromRecord(v, rec, timeStr, status);
+}
+
+static void localHHMM(uint32_t utc, char* buf, int cap) {
+  qlogic::Civil c = qlogic::civilFromEpoch(utc, qlogic::TZ_TW);
+  snprintf(buf, cap, "%02d:%02d", c.hh, c.mm2);
+}
+
+// "HH:MM:SS" → "HH:MM"（header 時間用）
+static void hhmm(const char* t8, char* out) {
+  memcpy(out, t8, 5);
+  out[5] = '\0';
+}
+
+// ---------- 抓取＋持久化 ----------
+struct FetchResult {
+  bool ok;         // transport/JSON/驗證成功
+  bool isToday;    // d == 今日（僅 ok 時有意義）
+  qlogic::MarketBatch mb;
+};
+
+static FetchResult fetchUpdate(uint32_t nowUtc, const char* todayStr) {
+  FetchResult fr;
+  fr.ok = false;
+  fr.isToday = false;
+  int r = quoteFetch(&fr.mb);
+  if (r != 0) return fr;
+  fr.ok = true;
+  fr.isToday = (strcmp(fr.mb.date, todayStr) == 0);
+  // write-on-change：先載入舊 record、補回可保留旗標，再單次比較
+  // （quoteTime/savedEpoch 不參與比較——spec 修訂四版）
+  qlogic::QuoteRecord old;
+  bool have = quoteRecordLoad(&old);
+  qlogic::QuoteRecord rec = {};
+  rec.version = qlogic::BLOB_VERSION;
+  for (int i = 0; i < WATCH_N; i++) rec.rows[i] = fr.mb.rows[i];
+  strcpy(rec.quoteDate, fr.mb.date);
+  strcpy(rec.quoteTime, fr.mb.quoteTime);
+  if (have && strcmp(old.lastCloseDate, rec.quoteDate) == 0) {
+    strcpy(rec.lastCloseDate, old.lastCloseDate);   // 定格日與本次交易日相同才保留
+  }
+  if (!have || qlogic::recordDiffers(old, rec)) {
+    quoteRecordSave(&rec, nowUtc);
+    LOGF("nvs save\n");
+  }
+  return fr;
+}
+
+// 收盤定格寫入（PostClose 與 MENU 於收盤後成功共用）——write-on-change：
+// 候選 record（含新定格旗標）與現存快取真正不同才寫入；savedEpoch
+// 語意保持「最後持久化時間」
+static void finalizeClose(const qlogic::MarketBatch& mb, const char* today,
+                          uint32_t nowUtc) {
+  qlogic::QuoteRecord old;
+  bool have = quoteRecordLoad(&old);
+  qlogic::QuoteRecord rec = {};
+  rec.version = qlogic::BLOB_VERSION;
+  for (int i = 0; i < WATCH_N; i++) rec.rows[i] = mb.rows[i];
+  strcpy(rec.quoteDate, mb.date);
+  strcpy(rec.quoteTime, mb.quoteTime);
+  strcpy(rec.lastCloseDate, today);
+  if (!have || qlogic::recordDiffers(old, rec)) {
+    quoteRecordSave(&rec, nowUtc);
+    LOGF("nvs save (close)\n");
+  }
+}
+
+// ---------- 睡眠 ----------
+static void goToDeepSleep(uint32_t targetUtc, bool enableExt1) {
+  uint32_t now = (uint32_t)time(nullptr);
+  uint32_t delta;
+  if (stuckGuard) {
+    // 卡鍵（spec R4）：一律 5 分鐘 timer-only——停用 EXT1 且覆寫狀態路徑
+    // 目標，避免 Weekend/PostClose 長睡讓板子長時間不可達
+    delta = 300;
+    enableExt1 = false;
+    LOGF("[warn] stuck: 5 min timer-only retry\n");
+  } else {
+    delta = qlogic::capSleep(now, targetUtc);
+  }
+  uint64_t us = (uint64_t)delta * 1000000ULL;
+  uiHibernate();
+  uiSleepHoldPins();
+  Serial.flush();
+  delay(500);
+  // s_config 開機歸零；零遮罩覆寫清除 RTC EXT1（相框已驗證做法）
+  esp_sleep_enable_ext1_wakeup(0, ESP_EXT1_WAKEUP_ANY_LOW);
+  esp_sleep_enable_timer_wakeup(us);
+  if (enableExt1) {
+    esp_sleep_enable_ext1_wakeup((1ULL << BTN_MENU), ESP_EXT1_WAKEUP_ANY_LOW);
+    rtc_gpio_init((gpio_num_t)BTN_MENU);
+    rtc_gpio_set_direction((gpio_num_t)BTN_MENU, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pullup_en((gpio_num_t)BTN_MENU);
+    rtc_gpio_pulldown_dis((gpio_num_t)BTN_MENU);
+  }
+  LOGF("sleep %lus ext1=%d\n", (unsigned long)delta, enableExt1 ? 1 : 0);
+  esp_deep_sleep_start();
+}
+
+// 依市場狀態取得長睡目標（PostClose/Weekend → 次平日 09:00；PreMarket → 當日 09:00）
+static uint32_t longSleepTarget(qlogic::MarketState st, uint32_t now) {
+  switch (st) {
+    case qlogic::MarketState::PreMarket: return qlogic::todayAt9(now);
+    case qlogic::MarketState::Trading:   return qlogic::nextTradingBoundary(now);
+    default:                             return qlogic::nextWeekdayAt9(now);
+  }
+}
+
+// ---------- 主流程 ----------
+static bool waitButtonsReleased(uint32_t timeoutMs) {
+  uint32_t t0 = millis();
+  while (millis() - t0 < timeoutMs) {
+    if (digitalRead(BTN_MENU) && digitalRead(BTN_UP) &&
+        digitalRead(BTN_DOWN) && digitalRead(BTN_PRESS)) {
+      return true;
+    }
+    delay(10);
+    yield();
+  }
+  LOGF("[warn] buttons still held after %lu ms\n", (unsigned long)timeoutMs);
+  return false;
+}
 
 void setup() {
   Serial.begin(115200);
   delay(500);
-  LOGF("quote fetch harness\n");
+  g_wake = esp_sleep_get_wakeup_cause();
+  g_wakeMask = (g_wake == ESP_SLEEP_WAKEUP_EXT1)
+                   ? (uint32_t)esp_sleep_get_ext1_wakeup_status()
+                   : 0;
+  bool menuWake = (g_wakeMask & (1ULL << BTN_MENU)) != 0;
+  LOGF("boot wake=%d mask=%u\n", (int)g_wake, g_wakeMask);
+
+  pinMode(BTN_MENU, INPUT_PULLUP);
+  pinMode(BTN_UP, INPUT_PULLUP);
+  pinMode(BTN_DOWN, INPUT_PULLUP);
+  pinMode(BTN_PRESS, INPUT_PULLUP);
+
+  // 卡鍵防護（R4）：等待釋放；stuck → 該輪 timer-only 5 分
+  bool released = waitButtonsReleased(WAIT_RELEASE_MS);
+  stuckGuard = !released;
+  if (stuckGuard) {
+    LOGF("[warn] stuck button\n");
+    menuWake = false;
+  }
+
   uiInit();
+
+  // Wi-Fi／NTP 失敗路徑（spec 修訂三版）
   if (!quoteWifiBegin(15000)) {
-    LOGF("wifi fail, halt\n");
+    qlogic::QuoteRecord cache;
+    if (loadCache(&cache)) {
+      char ts[8];
+      localHHMM(cache.savedEpoch, ts, sizeof ts);
+      QuoteView v;
+      viewFromRecord(&v, cache, ts, "更新失敗");
+      uiShowQuotes(v);
+    } else {
+      uiShowMessage("NO WIFI", "check network");
+    }
+    goToDeepSleep((uint32_t)time(nullptr) + 300, !stuckGuard);
     return;
   }
   if (!quoteNtpSync(10000)) {
-    LOGF("ntp fail\n");
+    qlogic::QuoteRecord cache;
+    if (loadCache(&cache)) {
+      char ts[8];
+      localHHMM(cache.savedEpoch, ts, sizeof ts);
+      QuoteView v;
+      viewFromRecord(&v, cache, ts, "時間未同步");
+      uiShowQuotes(v);
+    } else {
+      uiShowMessage("TIME NOT SYNC", "retry in 5 min");
+    }
+    goToDeepSleep((uint32_t)time(nullptr) + 300, !stuckGuard);
+    return;
   }
-  qlogic::MarketBatch mb;
-  int r = quoteFetch(&mb);
-  LOGF("fetch=%d\n", r);
-  if (r == 0) {
-    for (int i = 0; i < WATCH_N; i++) {
-      qlogic::QuoteCalc c = qlogic::calcQuote(mb.rows[i].z, mb.rows[i].y);
-      LOGF("  %s z=%.2f y=%.2f chg=%+.2f pct=%+.2f%% t=%s\n",
-           mb.rows[i].code, mb.rows[i].z, mb.rows[i].y, c.chg, c.pct, mb.rows[i].t);
-    }
-    LOGF("date=%s quoteTime=%s\n", mb.date, mb.quoteTime);
-    qlogic::QuoteRecord rec = {};
-    rec.version = qlogic::BLOB_VERSION;
-    for (int i = 0; i < WATCH_N; i++) rec.rows[i] = mb.rows[i];
-    strcpy(rec.quoteDate, mb.date);
-    strcpy(rec.quoteTime, mb.quoteTime);
-    LOGF("save=%d\n", quoteRecordSave(&rec, (uint32_t)time(nullptr)));
-    qlogic::QuoteRecord back;
-    LOGF("load=%d\n", quoteRecordLoad(&back));
 
-    QuoteView v = {};
-    for (int i = 0; i < WATCH_N; i++) {
-      v.names[i] = WATCHLIST[i].name;
-      qlogic::QuoteCalc c = qlogic::calcQuote(mb.rows[i].z, mb.rows[i].y);
-      v.z[i] = mb.rows[i].z;
-      v.chg[i] = c.chg;
-      v.pct[i] = c.pct;
+  uint32_t now = (uint32_t)time(nullptr);
+  char today[16];
+  qlogic::dateOfEpoch(now, qlogic::TZ_TW, today, sizeof today);
+  qlogic::MarketState st = qlogic::marketState(now);
+  char lt[8];
+  localHHMM(now, lt, sizeof lt);
+  LOGF("state=%d today=%s local=%s\n", (int)st, today, lt);
+
+  // MENU 立即更新（任何狀態；spec 修訂六版：休市日/定格結果與一般路徑同規則）
+  if (menuWake) {
+    FetchResult fr = fetchUpdate(now, today);
+    QuoteView v;
+    if (fr.ok) {
+      char qt[8];
+      hhmm(fr.mb.quoteTime, qt);
+      viewFromBatch(&v, fr.mb, qt, nullptr);
+      uiShowQuotes(v);
+      if (!fr.isToday &&
+          (st == qlogic::MarketState::Trading || st == qlogic::MarketState::PostClose)) {
+        // 休市日手動更新 → 與一般路徑同規則：睡至隔日 09:00（避免短週期）
+        goToDeepSleep(qlogic::nextDayAt9((uint32_t)time(nullptr)), !stuckGuard);
+        return;
+      }
+      if (st == qlogic::MarketState::PostClose && fr.isToday) {
+        // 順帶完成收盤定格，避免次輪重抓
+        finalizeClose(fr.mb, today, (uint32_t)time(nullptr));
+      }
+      goToDeepSleep(longSleepTarget(st, (uint32_t)time(nullptr)), !stuckGuard);
+      return;
     }
-    qlogic::formatDateTW(mb.date, v.dateStr, sizeof v.dateStr);
-    strcpy(v.timeStr, "13:33");   // harness 固定值；正式路徑於 Task 7
-    uiShowQuotes(v);
+    qlogic::QuoteRecord cache;
+    if (loadCache(&cache)) {
+      char ts[8];
+      localHHMM(cache.savedEpoch, ts, sizeof ts);
+      viewFromRecord(&v, cache, ts, "更新失敗");
+      uiShowQuotes(v);
+    } else {
+      uiShowMessage("FETCH FAIL", "retry in 5 min");
+    }
+    if (st == qlogic::MarketState::PreMarket || st == qlogic::MarketState::Weekend) {
+      goToDeepSleep(longSleepTarget(st, (uint32_t)time(nullptr)), !stuckGuard);
+    } else {
+      goToDeepSleep((uint32_t)time(nullptr) + 300, !stuckGuard);
+    }
+    return;
+  }
+
+  switch (st) {
+    case qlogic::MarketState::PreMarket: {
+      goToDeepSleep(qlogic::todayAt9(now), !stuckGuard);
+      return;
+    }
+    case qlogic::MarketState::Trading: {
+      FetchResult fr = fetchUpdate(now, today);
+      QuoteView v;
+      if (fr.ok) {
+        if (!fr.isToday) {
+          // 假日：渲染本次回應（舊交易日資料），睡到隔日 09:00
+          char qt[8];
+          hhmm(fr.mb.quoteTime, qt);
+          viewFromBatch(&v, fr.mb, qt, nullptr);
+          uiShowQuotes(v);
+          goToDeepSleep(qlogic::nextDayAt9((uint32_t)time(nullptr)), !stuckGuard);
+          return;
+        }
+        char qt[8];
+        hhmm(fr.mb.quoteTime, qt);
+        viewFromBatch(&v, fr.mb, qt, nullptr);
+        uiShowQuotes(v);
+        goToDeepSleep(qlogic::nextTradingBoundary((uint32_t)time(nullptr)), !stuckGuard);
+        return;
+      }
+      // 失敗：快取＋更新失敗 → 5 分重試
+      qlogic::QuoteRecord cache;
+      if (loadCache(&cache)) {
+        char ts[8];
+        localHHMM(cache.savedEpoch, ts, sizeof ts);
+        viewFromRecord(&v, cache, ts, "更新失敗");
+        uiShowQuotes(v);
+      } else {
+        uiShowMessage("FETCH FAIL", "retry in 5 min");
+      }
+      goToDeepSleep((uint32_t)time(nullptr) + 300, !stuckGuard);
+      return;
+    }
+    case qlogic::MarketState::PostClose: {
+      qlogic::QuoteRecord cache;
+      bool have = loadCache(&cache);
+      if (have && strcmp(cache.lastCloseDate, today) == 0) {
+        // 已定格
+        goToDeepSleep(qlogic::nextWeekdayAt9(now), !stuckGuard);
+        return;
+      }
+      FetchResult fr = fetchUpdate(now, today);
+      QuoteView v;
+      if (fr.ok && fr.isToday) {
+        // 收盤定格：寫 lastCloseDate（共用 helper）
+        finalizeClose(fr.mb, today, (uint32_t)time(nullptr));
+        char ts[8];
+        localHHMM((uint32_t)time(nullptr), ts, sizeof ts);
+        viewFromBatch(&v, fr.mb, ts, nullptr);
+        uiShowQuotes(v);
+        goToDeepSleep(qlogic::nextWeekdayAt9((uint32_t)time(nullptr)), !stuckGuard);
+        return;
+      }
+      if (fr.ok && !fr.isToday) {
+        // 休市日（d != today）：顯示後睡至隔日 09:00（不得 5 分重試迴圈）
+        if (have) {
+          char ts[8];
+          localHHMM(cache.savedEpoch, ts, sizeof ts);
+          viewFromRecord(&v, cache, ts, nullptr);
+          uiShowQuotes(v);
+        } else {
+          char qt[8];
+          hhmm(fr.mb.quoteTime, qt);
+          viewFromBatch(&v, fr.mb, qt, nullptr);
+          uiShowQuotes(v);
+        }
+        goToDeepSleep(qlogic::nextDayAt9(now), !stuckGuard);
+        return;
+      }
+      // 失敗 → 5 分重試
+      if (have) {
+        char ts[8];
+        localHHMM(cache.savedEpoch, ts, sizeof ts);
+        viewFromRecord(&v, cache, ts, "更新失敗");
+        uiShowQuotes(v);
+      } else {
+        uiShowMessage("FETCH FAIL", "retry in 5 min");
+      }
+      goToDeepSleep((uint32_t)time(nullptr) + 300, !stuckGuard);
+      return;
+    }
+    case qlogic::MarketState::Weekend: {
+      goToDeepSleep(qlogic::nextWeekdayAt9(now), !stuckGuard);
+      return;
+    }
+    default: {
+      // 防禦：marketState 異常值不墜入 loop()（帶 Wi-Fi 空轉）
+      goToDeepSleep(now + 300, !stuckGuard);
+      return;
+    }
   }
 }
 
-void loop() { delay(1000); }
+void loop() { delay(100); }
