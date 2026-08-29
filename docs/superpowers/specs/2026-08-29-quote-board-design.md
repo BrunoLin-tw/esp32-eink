@@ -1,7 +1,8 @@
 # 報價看板設計規格（Quote Board v1）
 
-- 日期：2026-08-29（修訂四版：併入 P0-1~4、R1~5、繪製層改 GxEPD2 rotation、
-  POST_CLOSE 休市日分支、NTP 失敗路徑、NVS quoteDate 與快取時間語意）
+- 日期：2026-08-29（修訂五版：併入 P0-1~4、R1~5、繪製層改 GxEPD2 rotation、
+  POST_CLOSE 休市日分支、NTP 失敗路徑、NVS quoteDate 與快取時間語意、
+  TLS 主要路徑改釘選根 CA）
 - 狀態：已核准（brainstorming 完成、規格審查修訂完成）
 - 前置：天氣看板（`weather-v1`，Wi-Fi/NTP/JSON/深睡管線已驗證）、SD 相框（`photo-frame-v1`，現行 master，互動/NVS 紀律已驗證）
 
@@ -28,13 +29,17 @@
 
 ### HTTP/TLS 契約
 
-- **TLS**：`WiFiClientSecure::setCACertBundle(esp_crt_bundle_get())`——core 2.0.17
-  sdkconfig 已啟用 `MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL`（Mozilla 全量根庫，
-  含 TWCA Global Root CA；實測鏈：葉→TWCA SSL Sub-CA→TWCA Global Root CA，
-  葉憑證 2026-11-28 到期，不釘葉）。
-  - 備案：若實機 handshake 失敗，改釘 **TWCA Global Root CA** PEM（self-signed，
-    2030-12-31 到期，PEM 入版本控管 `src/twse_root_ca.h`）。
-  - **`setInsecure()` 禁用於 v1**。
+- **TLS（修訂五版：主要路徑改釘選根 CA）**：`WiFiClientSecure::setCACert(TWSE_ROOT_CA_PEM)`。
+  改判原因（原始碼查證）：Arduino core 之 bundle 路徑需先 `arduino_esp_crt_bundle_set()`
+  餵入 `esp_crt_bundle_gen.py` 產生之自製 blob——core 未附該工具、亦無 menuconfig
+  預設 bundle 可取（`crts==NULL` 時 attach 直接失敗）；單一根 CA 釘選走 mbedtls
+  原生 PEM 解析，成本最低且行為明確。
+  - 釘選：**TWCA Global Root CA**（self-signed，**2030-12-31 到期**；SHA256
+    fingerprint `59:76:90:07:F7:68:5D:0F:CD:50:87:2F:9F:95:D5:75:5A:5B:2B:45:7D:
+    81:F3:69:2B:61:0A:98:67:2F:0E:1B`），PEM 版本控管於 `src/twse_root_ca.h`。
+  - 鏈（實測）：葉 mis.twse.com.tw（2026-11-28 到期，不釘葉）→ TWCA SSL
+    Sub-CA → 本根。
+  - **`setInsecure()` 禁用於 v1**；根 CA 到期前未更新屬維運缺失（驗證矩陣 TLS 項）。
 - connect timeout 10 s；整體 timeout 15 s。
 - User-Agent：`esp32-eink-quote/1.0`。
 - response 上限 32 KB（超出視為失敗）。
@@ -127,7 +132,7 @@ U8g2 內建中文字型僅 16px；20px／28px 名稱需自製**子集**字型：
 | `src/ui.h/.cpp` | 直式版面渲染（`display.setRotation(1)` 統一旋轉）、header、狀態字 |
 | `src/watchlist.h` | 標的清單常數（代碼＋`ex_ch`＋中文名） |
 | `src/secrets.h.example` | Wi-Fi 憑證範本（`secrets.h` 本機檔、gitignored） |
-| `src/twse_root_ca.h` | 備案用釘選 CA（僅於 bundle 失敗時啟用） |
+| `src/twse_root_ca.h` | TLS 主要信任錨（釘選 TWCA Global Root CA PEM，版本控管） |
 | `tools/gen_fonts.py` | 中文子集字型產生器（manifest＋可重現性契約） |
 | `platformio.ini` | **重新引入 `ArduinoJson@7.4.3`**（固定版，其餘版本不動） |
 
