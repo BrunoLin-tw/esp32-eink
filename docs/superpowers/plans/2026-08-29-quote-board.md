@@ -585,8 +585,21 @@ static void testParseJson() {
   printf("parseJson ok\n");
 }
 
+static void testValidDate() {
+  assert(qlogic::validDate("20260828"));
+  assert(qlogic::validDate("20240229"));   // 閏年
+  assert(!qlogic::validDate("20260231"));  // 不存在的日期
+  assert(!qlogic::validDate("20230229"));  // 非閏年
+  assert(!qlogic::validDate("20261301"));  // 月 13
+  assert(!qlogic::validDate("20260010"));  // 月 0
+  assert(!qlogic::validDate("2026-828"));
+  assert(!qlogic::validDate("2026082"));
+  printf("validDate ok\n");
+}
+
 int main() {
   testParseNum();
+  testValidDate();
   testParseJson();
   testValidateBatch();
   testCalc();
@@ -708,13 +721,44 @@ struct MarketBatch {
   char quoteTime[9];
 };
 
+// Howard Hinnant civil_from_days / days_from_civil（公有領域）
+inline void civilFromDays(int64_t z, int* y, unsigned* m, unsigned* d) {
+  z += 719468;
+  int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+  unsigned doe = static_cast<unsigned>(z - era * 146097);
+  unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  int64_t yy = static_cast<int64_t>(yoe) + era * 400;
+  unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  unsigned mp = (5 * doy + 2) / 153;
+  unsigned dd = doy - (153 * mp + 2) / 5 + 1;
+  unsigned mm = mp < 10 ? mp + 3 : mp - 9;
+  *y = static_cast<int>(yy + (mm <= 2));
+  *m = mm;
+  *d = dd;
+}
+
+inline int64_t daysFromCivil(int y, int m, int d) {
+  y -= (m <= 2);
+  int64_t era = (y >= 0 ? y : y - 399) / 400;
+  unsigned yoe = static_cast<unsigned>(y - era * 400);
+  unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + static_cast<int64_t>(doe) - 719468;
+}
+
+// 真日曆驗證（round-trip）：拒絕 20260231 這類不存在的日期
 inline bool validDate(const char* s) {
   if (strlen(s) != 8) return false;
   for (int i = 0; i < 8; i++)
     if (s[i] < '0' || s[i] > '9') return false;
-  int m = (s[4] - '0') * 10 + (s[5] - '0');
-  int d = (s[6] - '0') * 10 + (s[7] - '0');
-  return m >= 1 && m <= 12 && d >= 1 && d <= 31;
+  int y = (s[0] - '0') * 1000 + (s[1] - '0') * 100 + (s[2] - '0') * 10 + (s[3] - '0');
+  int mo = (s[4] - '0') * 10 + (s[5] - '0');
+  int da = (s[6] - '0') * 10 + (s[7] - '0');
+  if (mo < 1 || mo > 12 || da < 1) return false;
+  int y2;
+  unsigned m2, d2;
+  civilFromDays(daysFromCivil(y, mo, da), &y2, &m2, &d2);
+  return y2 == y && m2 == static_cast<unsigned>(mo) && d2 == static_cast<unsigned>(da);
 }
 
 inline bool validTime(const char* s) {
@@ -738,7 +782,7 @@ inline bool parseNum(const char* s, double* out) {
   char* end = nullptr;
   double v = strtod(s, &end);
   if (end == s || *end != '\0') return false;
-  if (!isfinite(v)) return false;
+  if (!std::isfinite(v)) return false;
   *out = v;
   return true;
 }
@@ -850,31 +894,6 @@ inline void formatPrice(double v, char* buf, int cap) {
   strncat(buf, dot, cap - 1 - p);
 }
 
-// Howard Hinnant civil_from_days / days_from_civil（公有領域）
-inline void civilFromDays(int64_t z, int* y, unsigned* m, unsigned* d) {
-  z += 719468;
-  int64_t era = (z >= 0 ? z : z - 146096) / 146097;
-  unsigned doe = static_cast<unsigned>(z - era * 146097);
-  unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-  int64_t yy = static_cast<int64_t>(yoe) + era * 400;
-  unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-  unsigned mp = (5 * doy + 2) / 153;
-  unsigned dd = doy - (153 * mp + 2) / 5 + 1;
-  unsigned mm = mp < 10 ? mp + 3 : mp - 9;
-  *y = static_cast<int>(yy + (mm <= 2));
-  *m = mm;
-  *d = dd;
-}
-
-inline int64_t daysFromCivil(int y, int m, int d) {
-  y -= (m <= 2);
-  int64_t era = (y >= 0 ? y : y - 399) / 400;
-  unsigned yoe = static_cast<unsigned>(y - era * 400);
-  unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-  unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  return era * 146097 + static_cast<int64_t>(doe) - 719468;
-}
-
 struct Civil {
   int y, m, d, hh, mm2, ss, wday;  // wday 0=Sun
 };
@@ -900,7 +919,7 @@ inline const char* weekdayHan(int wday) {
 
 inline void formatDateTW(const char* date, char* buf, int cap) {
   if (!validDate(date)) {
-    snprintf(buf, cap, "??-??");
+    snprintf(buf, cap, "\?\?-\?\?");   // \?\? 避免 trigraph
     return;
   }
   int y = (date[0] - '0') * 1000 + (date[1] - '0') * 100 + (date[2] - '0') * 10 + (date[3] - '0');
@@ -1108,7 +1127,7 @@ inline bool recordSane(const QuoteRecord& r) {
   if (r.lastCloseDate[0] != '\0' && !validDate(r.lastCloseDate)) return false;
   for (int i = 0; i < 5; i++) {
     if (strcmp(r.rows[i].code, EXPECT_CODES[i]) != 0) return false;
-    if (!isfinite(r.rows[i].z) || !isfinite(r.rows[i].y)) return false;
+    if (!std::isfinite(r.rows[i].z) || !std::isfinite(r.rows[i].y)) return false;
     if (r.rows[i].y == 0.0) return false;
     if (!validTime(r.rows[i].t)) return false;
   }
@@ -1304,17 +1323,18 @@ int quoteFetch(qlogic::MarketBatch* out) {
     http.end();
     return -12;
   }
-  // 有界讀取（spec P0：上限必須在資料進入 String/JsonDocument 前生效）：
-  // 固定 32KB 緩衝逐段讀，超限即截斷→失敗；len==-1（無 Content-Length）亦受此保護
-  static char body[32769];                 // 32768 資料 + NUL（BSS，不佔 stack）
+  // 有界讀取（spec P0：上限必須在資料進入 String/JsonDocument 前生效）。
+  // 上限語意＝payload ≤ 32768 bytes（含）：以第 32769 byte 作 probe——
+  // 讀滿 32769 即確定超限→失敗；恰好 32768 合法。len==-1（無 Content-Length）亦受保護。
+  static char body[32770];                 // 32769 probe 緩衝 + NUL（BSS，不佔 stack）
   int total = 0;
   WiFiClient* stream = http.getStreamPtr();
   uint32_t t0 = millis();
-  while ((http.connected() || stream->available()) && total < 32768 &&
+  while ((http.connected() || stream->available()) && total < 32769 &&
          millis() - t0 < 15000) {
     int avail = stream->available();
     if (avail > 0) {
-      int want = (32768 - total) < avail ? (32768 - total) : avail;
+      int want = (32769 - total) < avail ? (32769 - total) : avail;
       int n = stream->read((uint8_t*)(body + total), (size_t)want);
       if (n <= 0) break;
       total += n;
@@ -1328,7 +1348,7 @@ int quoteFetch(qlogic::MarketBatch* out) {
     LOGF("[fail] empty body\n");
     return -12;
   }
-  if (total >= 32768) {
+  if (total > 32768) {
     LOGF("[fail] body over 32KB cap\n");
     return -12;
   }
@@ -1661,18 +1681,19 @@ static FetchResult fetchUpdate(uint32_t nowUtc, const char* todayStr) {
   if (r != 0) return fr;
   fr.ok = true;
   fr.isToday = (strcmp(fr.mb.date, todayStr) == 0);
-  // write-on-change：僅在值變更時寫入（quoteTime/savedEpoch 不觸發）
+  // write-on-change：先載入舊 record、補回可保留旗標，再單次比較
+  // （quoteTime/savedEpoch 不參與比較——spec 修訂四版）
+  qlogic::QuoteRecord old;
+  bool have = quoteRecordLoad(&old);
   qlogic::QuoteRecord rec = {};
   rec.version = qlogic::BLOB_VERSION;
   for (int i = 0; i < WATCH_N; i++) rec.rows[i] = fr.mb.rows[i];
   strcpy(rec.quoteDate, fr.mb.date);
   strcpy(rec.quoteTime, fr.mb.quoteTime);
-  qlogic::QuoteRecord old;
-  if (!quoteRecordLoad(&old) || qlogic::recordDiffers(old, rec)) {
-    // 保留 lastCloseDate（若快取存在且 lastCloseDate 與 quoteDate 同日仍有效）
-    if (quoteRecordLoad(&old) && strcmp(old.lastCloseDate, rec.quoteDate) == 0) {
-      strcpy(rec.lastCloseDate, old.lastCloseDate);
-    }
+  if (have && strcmp(old.lastCloseDate, rec.quoteDate) == 0) {
+    strcpy(rec.lastCloseDate, old.lastCloseDate);   // 定格日與本次交易日相同才保留
+  }
+  if (!have || qlogic::recordDiffers(old, rec)) {
     quoteRecordSave(&rec, nowUtc);
     LOGF("nvs save\n");
   }
@@ -1808,8 +1829,9 @@ void setup() {
       hhmm(fr.mb.quoteTime, qt);
       viewFromBatch(&v, fr.mb, qt, nullptr);
       uiShowQuotes(v);
-      if (st == qlogic::MarketState::Trading && !fr.isToday) {
-        // 假日手動更新 → 同樣睡至隔日 09:00（避免短週期）
+      if (!fr.isToday &&
+          (st == qlogic::MarketState::Trading || st == qlogic::MarketState::PostClose)) {
+        // 休市日手動更新 → 與一般路徑同規則：睡至隔日 09:00（避免短週期）
         goToDeepSleep(qlogic::nextDayAt9((uint32_t)time(nullptr)), !stuckGuard);
         return;
       }
@@ -1834,10 +1856,6 @@ void setup() {
     } else {
       goToDeepSleep((uint32_t)time(nullptr) + 300, !stuckGuard);
     }
-    return;
-  }
-    }
-    goToDeepSleep(longSleepTarget(st, (uint32_t)time(nullptr)), !stuckGuard);
     return;
   }
 
