@@ -29,9 +29,11 @@ OUT_C = "src/fonts_quote.c"
 OUT_H = "src/fonts_quote.h"
 
 # glyph manifest（明列；新增字元 = 修改這裡後重跑）
-G16 = "週日一二三四五六更新失敗時間未同步0123456789:- "
-G20 = "台積電鴻海元大灣富邦05"
-G28 = "加權指數"
+# 各組補 A/1(/g：bdfconv 以 glyph 'A' 定 ascent_A、'g' 定 descent_g，
+# 缺這些參照字會讓 u8g2_GetAscent()/GetDescent() 回傳錯誤值（quote20/28 = 0）
+G16 = "週日一二三四五六更新失敗時間未同步0123456789:- " + "A1(g"
+G20 = "台積電鴻海元大灣富邦05" + "A1(g"
+G28 = "加權指數" + "A1(g"
 MANIFEST = {16: G16, 20: G20, 28: G28}
 
 
@@ -49,7 +51,12 @@ def resolve_font(cli_font: str | None) -> str:
 def build_bdf(size: int, chars: str, path: str, font_path: str) -> None:
     font = ImageFont.truetype(font_path, size)
     ascent, descent = font.getmetrics()
-    canvas_h = size + 8
+    # 去除重複字元（備援參照字串接可能與既有字元重複，如 G16 的 '1'）；
+    # BDF 重複 ENCODING 會被 bdfconv 全數保留，產出冗餘 glyph
+    chars = "".join(dict.fromkeys(chars))
+    # canvas 高度需含 descent 空間，否則 baseline 下方 glyph（CJK 底緣低於 baseline）
+    # 會被 canvas 底緣裁切（如 28px 權/指/數 少 1px）
+    canvas_h = size + descent + 10
     lines = [
         "STARTFONT 2.1",
         f"FONT u8g2_font_quote{size}",
@@ -124,7 +131,11 @@ def main() -> None:
     ap.add_argument("--font", help="覆寫字型路徑（限 OFL 授權之 Noto CJK）")
     args = ap.parse_args()
     if not os.path.exists(BDFCONV):
-        sys.exit("bdfconv 不存在，先執行 Step 1")
+        sys.exit(
+            "bdfconv 不存在；先執行："
+            "git clone --depth 1 --branch 2.37.1 https://github.com/olikraus/u8g2 /tmp/opencode/u8g2"
+            " && make -C /tmp/opencode/u8g2/tools/font/bdfconv"
+        )
     font_path = resolve_font(args.font)
     os.makedirs("src", exist_ok=True)
     sha = hashlib.sha256(open(font_path, "rb").read()).hexdigest()
@@ -148,7 +159,7 @@ def main() -> None:
         if f"Glyphs: {n}/{n}" not in open(tmp_c).read()[:200]:
             sys.exit(f"size {size}: bdfconv 輸出 glyph 數不符（manifest {n}）")
         parts.append(extract_array(tmp_c))
-        print(f"size {size}: {len(chars)} glyphs ok (bdfconv rc=0)")
+        print(f"size {size}: {len(set(chars))} glyphs ok (bdfconv rc=0)")
     banner = (
         "// 自動產生：tools/gen_fonts.py（勿手改）\n"
         f"// font: {font_path} sha256={sha[:16]}... (SIL OFL 1.0)\n"
@@ -161,11 +172,12 @@ def main() -> None:
     with open(OUT_C, "w") as f:
         f.write(banner + "\n".join(parts))
     with open(OUT_H, "w") as f:
+        externs = "".join(
+            f"extern const uint8_t u8g2_font_quote{size}[];\n" for size in MANIFEST
+        )
         f.write(
             "// 自動產生對應宣告：tools/gen_fonts.py（勿手改）\n#pragma once\n#include <stdint.h>\n"
-            "extern const uint8_t u8g2_font_quote16[];\n"
-            "extern const uint8_t u8g2_font_quote20[];\n"
-            "extern const uint8_t u8g2_font_quote28[];\n"
+            + externs
         )
     print(f"ok -> {OUT_C}, {OUT_H}")
 
