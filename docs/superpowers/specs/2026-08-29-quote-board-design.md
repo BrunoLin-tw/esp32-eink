@@ -1,7 +1,7 @@
 # 報價看板設計規格（Quote Board v1）
 
-- 日期：2026-08-29（修訂三版：併入規格審查 P0-1~4、R1~5、繪製層改 GxEPD2 rotation、
-  POST_CLOSE 休市日分支、NTP 失敗路徑）
+- 日期：2026-08-29（修訂四版：併入 P0-1~4、R1~5、繪製層改 GxEPD2 rotation、
+  POST_CLOSE 休市日分支、NTP 失敗路徑、NVS quoteDate 與快取時間語意）
 - 狀態：已核准（brainstorming 完成、規格審查修訂完成）
 - 前置：天氣看板（`weather-v1`，Wi-Fi/NTP/JSON/深睡管線已驗證）、SD 相框（`photo-frame-v1`，現行 master，互動/NVS 紀律已驗證）
 
@@ -49,6 +49,7 @@
 3. `y != 0`。
 4. `d` 為 8 位數日期（YYYYMMDD）；`t` 為 `HH:MM:SS` 格式。
 5. 名稱 `n` 非空。
+6. **五列 `d` 彼此完全一致**——否則整批欄位驗證失敗。
 
 - **備案**：若公開 API 長期不穩，經使用者同意後切換為「本機 Shioaji 橋接」（方案 A）——本規格不含其實作。
 
@@ -78,8 +79,10 @@
   與 `fetchedEpoch`（抓取當下本地時間）。
   - 盤中成功 → 顯示 `quoteTime`（HH:MM）。
   - 收盤定格成功 → 顯示 `fetchedEpoch`（HH:MM）。
-  - 快取畫面（抓取失敗）→ 顯示快取 `savedEpoch`（HH:MM）＋「更新失敗」。
-- header 交易日：快取/成功回應之 `d` 轉 `MM-DD 週X`。
+  - 快取畫面（抓取失敗）→ 顯示快取 `savedEpoch`（HH:MM）＋「更新失敗」；
+    `savedEpoch` 語意＝**最後持久化快取時間**（非最後成功抓取時間，見 NVS）。
+- header 交易日：成功回應＝本次 `d` 轉 `MM-DD 週X`；快取畫面＝NVS
+  `quoteDate` 轉 `MM-DD 週X`（`d` 不入 NVS，以 `quoteDate` 為準）。
 
 ### 繪製層規則（旋轉）
 
@@ -172,11 +175,19 @@ U8g2 內建中文字型僅 16px；20px／28px 名稱需自製**子集**字型：
 ## NVS（單一 versioned blob，僅變更時寫入）
 
 - 單一 key `quote:rec`（一次 `Preferences::putBytes()`）：`{version, quotes[5],
-  quoteTime, lastCloseDate, savedEpoch}`。**禁止**拆多 key（避免掉電時不一致）。
+  quoteDate, quoteTime, lastCloseDate, savedEpoch}`。**禁止**拆多 key
+  （避免掉電時不一致）。
 - `quotes[5]`：每列 {code, price z, prevClose y, time t}。
-- 寫入時機：成功抓取且（任一報價欄位變更 **或** `lastCloseDate` 變更）才寫。
-- 載入驗證：version 符合、長度正確、欄位 sanity（數字有效、日期格式）→
-  失敗視為無有效快取。
+- `quoteDate`：本次成功回應（五列 `d` 一致）之報價日期（YYYYMMDD）——
+  快取畫面 header 交易日之唯一來源；**不得**以 `lastCloseDate` 代替
+  （它僅在收盤定格成功時更新，盤中失敗後會殘留舊日期）。
+- 寫入時機：成功抓取且（任一報價欄位 **或** `quoteDate` **或**
+  `lastCloseDate` 變更）才寫；**`quoteTime`/`savedEpoch` 單獨變更不觸發寫入**
+  （降低 flash 磨耗；成功畫面仍渲染本次新鮮值，僅快取保持舊值）。
+- `savedEpoch`：隨每次寫入更新為當下時間——語意＝最後**持久化**時間，
+  非最後成功抓取時間。
+- 載入驗證：version 符合、長度正確、欄位 sanity（數字有效、
+  `quoteDate`/`lastCloseDate` 日期格式）→ 失敗視為無有效快取。
 - 快取與假日判定隔離：**快取內容僅供顯示**，`d`/`lastCloseDate` 之假日判定
   只允許在「本次成功抓取且五列完整」條件下使用（見狀態機）。
 
@@ -193,7 +204,7 @@ host 端（不需硬體）：
 1. `gen_fonts.py` 產出字型含 manifest 全部 glyph、尺寸正確（20/28px）；產出 `.c` 入 repo。
 2. 漲跌計算（正/負/零、整數與小數）單元測試。
 3. JSON 解析＋欄位有效性（R2）：缺列/重複代碼、`z`/`y` 為 `-` 或空、`y==0`、
-   `d`/`t` 格式錯誤 → 整批失敗。
+   `d`/`t` 格式錯誤、**五列 `d` 不一致** → 整批失敗。
 4. **旋轉 golden test**：以 `display.setRotation(1)` 為唯一旋轉層的資料路徑——
    邏輯四角落座標映射、▲▼三角形方向、文字 baseline（adapter 經 GFX 繪製）、
    框線完整性、272x792 邊界裁切。
@@ -202,7 +213,8 @@ host 端（不需硬體）：
    **`POST_CLOSE` 休市日（成功但 `d != today`）→隔日 09:00、
    NTP 失敗→5 分短睡不判定狀態**、六日→週一 09:00、
    24 小時分段。
-6. NVS blob：版本/長度/sanity 驗證、單次 putBytes、僅變更時寫入。
+6. NVS blob：版本/長度/sanity 驗證（含 `quoteDate`）、單次 putBytes、
+   僅變更時寫入（**`quoteTime`/`savedEpoch` 單獨變更不寫**）。
 7. `pio run` 編譯 SUCCESS。
 
 硬體（逐項記錄結果與時間戳）：
@@ -212,7 +224,8 @@ host 端（不需硬體）：
 11. 中文名稱 20px/28px 渲染正確無缺字。
 12. 報價數值與證交所網頁一致（2330/2317/0050/006208/指數）。
 13. 漲跌▲▼與正負符號正確。
-14. header 時間語意：盤中 `quoteTime`／定格 `fetchedEpoch`／快取 `savedEpoch`＋「更新失敗」。
+14. header 時間語意：盤中 `quoteTime`／定格 `fetchedEpoch`／快取 `savedEpoch`
+    （＝最後持久化時間）＋「更新失敗」；交易日來源：成功＝`d`、快取＝`quoteDate`。
 15. MENU 按下→立即更新→依現狀態回歸排程。
 16. 盤中 5 分邊界自動更新（2 個以上週期，檢查喚醒 timestamp 對齊 :00/:05 邊界）。
 17. 收盤定格＋`lastCloseDate` 寫入＋時間戳正確。
