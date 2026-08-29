@@ -158,6 +158,8 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   uint32_t tBoot0 = millis();
+  uint32_t tBoot = tBoot0, tMount = tBoot0, tScan = tBoot0,
+           tRead = tBoot0, tRender = tBoot0;
   g_wake = esp_sleep_get_wakeup_cause();
   g_wakeMask = esp_sleep_get_ext1_wakeup_status();
   LOGF("boot wake=%d mask=%llu\n", (int)g_wake, (unsigned long long)g_wakeMask);
@@ -172,6 +174,7 @@ void setup() {
   if (stuckGuard) LOGF("[warn] stuck button detected\n");
 
   uiPowerOnInit();
+  tBoot = millis();
   LOGF("boot+display init %lu ms\n", (unsigned long)(millis() - tBoot0));
   if (!photoBegin()) {
     uiShowMessage("NO SD", "insert card with /raw_photos");
@@ -181,8 +184,9 @@ void setup() {
     goToDeepSleep(stuckGuard ? SLEEP_US_RETRY : 0, !stuckGuard && !anyWakePinLow());
     return;
   }
+  tMount = millis();
   int n = photoScan();
-  LOGF("mount+scan+sort %lu ms (%d files)\n", (unsigned long)(millis() - tBoot0), n);
+  tScan = millis();
   if (n <= 0) {
     const char* t = (n == -2) ? "TOO MANY PHOTOS" : "NO PHOTOS";
     uiShowMessage(t, "fix card /raw_photos");
@@ -205,9 +209,13 @@ void setup() {
     goToDeepSleep(stuckGuard ? SLEEP_US_RETRY : 0, !stuckGuard && !anyWakePinLow());
     return;
   }
-  LOGF("read %lu ms\n", (unsigned long)(millis() - tBoot0));
+  tRead = millis();
   uiShowPhoto();
-  LOGF("render+total %lu ms\n", (unsigned long)(millis() - tBoot0));
+  tRender = millis();
+  LOGF("perf boot=%lu mount=%lu scan_sort=%lu read=%lu render=%lu total=%lu ms\n",
+       (unsigned long)(tBoot - tBoot0), (unsigned long)(tMount - tBoot),
+       (unsigned long)(tScan - tMount), (unsigned long)(tRead - tScan),
+       (unsigned long)(tRender - tRead), (unsigned long)(tRender - tBoot0));
   LOGF("shown photo %d (%s)\n", shown, photoName(shown));
 
   // PRESS 喚醒：直接進設定選單（不先重刷同一張照片）；SD 仍掛載以利還原
