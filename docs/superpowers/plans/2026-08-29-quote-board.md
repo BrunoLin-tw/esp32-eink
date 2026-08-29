@@ -1700,16 +1700,23 @@ static FetchResult fetchUpdate(uint32_t nowUtc, const char* todayStr) {
   return fr;
 }
 
-// 收盤定格寫入（PostClose 與 MENU 於收盤後成功共用）
+// 收盤定格寫入（PostClose 與 MENU 於收盤後成功共用）——write-on-change：
+// 候選 record（含新定格旗標）與現存快取真正不同才寫入；savedEpoch
+// 語意保持「最後持久化時間」
 static void finalizeClose(const qlogic::MarketBatch& mb, const char* today,
                           uint32_t nowUtc) {
+  qlogic::QuoteRecord old;
+  bool have = quoteRecordLoad(&old);
   qlogic::QuoteRecord rec = {};
   rec.version = qlogic::BLOB_VERSION;
   for (int i = 0; i < WATCH_N; i++) rec.rows[i] = mb.rows[i];
   strcpy(rec.quoteDate, mb.date);
   strcpy(rec.quoteTime, mb.quoteTime);
   strcpy(rec.lastCloseDate, today);
-  quoteRecordSave(&rec, nowUtc);
+  if (!have || qlogic::recordDiffers(old, rec)) {
+    quoteRecordSave(&rec, nowUtc);
+    LOGF("nvs save (close)\n");
+  }
 }
 
 // ---------- 睡眠 ----------
