@@ -20,3 +20,5 @@ __pycache__/
 *.pyc
 # 本機測試圖片（不入庫）
 raw_photos/
+# 視覺輔助暫存（brainstorm 過程檔案）
+.superpowers/
