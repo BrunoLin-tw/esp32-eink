@@ -2,6 +2,7 @@
 // 映射抄自 Adafruit_GFX.cpp drawPixel case 1（WIDTH/HEIGHT 為 raw 成員變數，
 // 查證：Adafruit_GFX.cpp:2104-2107；setRotation 為 _width=HEIGHT、_height=WIDTH）
 // rotation 1：(x, y) → (RAW_W - 1 - y, x)；邏輯 272x792 → 實體 792x272
+// 驗證手法：四角落精確值、17-step 網格取樣界內檢查、三角形面積不變（剛性變換）
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -22,7 +23,7 @@ int main() {
   mapRot1(0, LOG_H - 1, &px, &py); assert(px == 0 && py == 0);
   mapRot1(LOG_W - 1, LOG_H - 1, &px, &py); assert(px == 0 && py == 271);
 
-  // 全域在界內（掃邊框 + 對角線取樣足以鎖契約）
+  // 全域在界內（17-step 網格取樣）
   for (int x = 0; x < LOG_W; x += 17) {
     for (int y = 0; y < LOG_H; y += 17) {
       mapRot1(x, y, &px, &py);

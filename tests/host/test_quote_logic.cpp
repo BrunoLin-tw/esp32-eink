@@ -64,6 +64,28 @@ static void testParseJson() {
   printf("parseJson ok\n");
 }
 
+static void testParseJsonTruncation() {
+  // n 欄 40 個 '名'（UTF-8 120 bytes）遠超 name[32]：
+  // parse 仍成功，name 截斷至 sizeof(name)-1 = 31 bytes 且第 32 byte 為 NUL
+  char name[3 * 40 + 1];
+  name[0] = '\0';
+  for (int i = 0; i < 40; i++) strcat(name, "名");
+  char fix[1024];
+  snprintf(fix, sizeof fix,
+           "{\"msgArray\":["
+           "{\"c\":\"t00\",\"n\":\"%s\",\"z\":\"46331.45\",\"y\":\"45975.22\",\"t\":\"13:33:00\",\"d\":\"20260828\"},"
+           "{\"c\":\"2330\",\"n\":\"台積電\",\"z\":\"2420.0000\",\"y\":\"2410.0000\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
+           "{\"c\":\"2317\",\"n\":\"鴻海\",\"z\":\"253.0000\",\"y\":\"252.0000\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
+           "{\"c\":\"0050\",\"n\":\"元大台灣50\",\"z\":\"106.9500\",\"y\":\"106.0500\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
+           "{\"c\":\"006208\",\"n\":\"富邦台50\",\"z\":\"245.1000\",\"y\":\"243.1500\",\"t\":\"13:30:00\",\"d\":\"20260828\"}]}",
+           name);
+  qlogic::RawBatch raw;
+  assert(qlogic::parseJsonToRaw(fix, strlen(fix), &raw) == qlogic::V_OK);
+  assert(strlen(raw.rows[0].name) == sizeof(raw.rows[0].name) - 1);
+  assert(raw.rows[0].name[sizeof(raw.rows[0].name) - 1] == '\0');
+  printf("parseJson truncation ok\n");
+}
+
 static void testValidateBatch() {
   qlogic::RawBatch raw = {};
   const char* codes[5] = {"t00", "2330", "2317", "0050", "006208"};
@@ -159,14 +181,24 @@ static void testCivil() {
   printf("civil ok\n");
 }
 
+static void testFormatDateInvalid() {
+  // 不存在的日期 → validDate 拒絕 → invalid 分支輸出 "??-??"
+  char buf[24];
+  qlogic::formatDateTW("20260231", buf, sizeof buf);
+  assert(strcmp(buf, "\?\?-\?\?") == 0);
+  printf("formatDate invalid ok\n");
+}
+
 int main() {
   testParseNum();
   testValidDate();
   testParseJson();
+  testParseJsonTruncation();
   testValidateBatch();
   testCalc();
   testFormatPrice();
   testCivil();
+  testFormatDateInvalid();
   printf("ALL PASS\n");
   return 0;
 }

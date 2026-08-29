@@ -11,8 +11,8 @@
 
 namespace qlogic {
 
-static const int TZ_TW = 8 * 3600;
-static const char* EXPECT_CODES[5] = {"t00", "2330", "2317", "0050", "006208"};
+static constexpr int TZ_TW = 8 * 3600;
+static const char* const EXPECT_CODES[5] = {"t00", "2330", "2317", "0050", "006208"};
 
 enum {
   V_OK = 0,
@@ -74,6 +74,9 @@ inline int64_t daysFromCivil(int y, int m, int d) {
   return era * 146097 + static_cast<int64_t>(doe) - 719468;
 }
 
+// 1970-01-01 為週四（wday=4）：days 自 epoch 起算
+inline int wdayFromDays(int64_t days) { return static_cast<int>(((days + 4) % 7 + 7) % 7); }
+
 // 真日曆驗證（round-trip）：拒絕 20260231 這類不存在的日期
 inline bool validDate(const char* s) {
   if (strlen(s) != 8) return false;
@@ -115,6 +118,7 @@ inline bool parseNum(const char* s, double* out) {
   return true;
 }
 
+// 非 V_OK 時 *out 內容不可用（可能部分寫入）
 inline int validateBatch(const RawBatch& in, MarketBatch* out) {
   bool seen[5] = {false, false, false, false, false};
   char date[9] = {0};
@@ -211,6 +215,10 @@ inline void formatPrice(double v, char* buf, int cap) {
   char raw[32];
   snprintf(raw, sizeof raw, "%.2f", v);
   const char* dot = strchr(raw, '.');
+  if (!dot) {
+    snprintf(buf, cap, "%.2f", v);
+    return;
+  }
   int intLen = (int)(dot - raw);
   int p = 0;
   for (int i = 0; i < intLen && p < cap - 1; i++) {
@@ -231,18 +239,20 @@ inline Civil civilFromEpoch(uint32_t utc, int tzOffsetSec) {
   int64_t days = local / 86400;
   int64_t rem = local % 86400;
   Civil c;
-  civilFromDays(days, &c.y, reinterpret_cast<unsigned*>(&c.m),
-                reinterpret_cast<unsigned*>(&c.d));
+  unsigned m, d;
+  civilFromDays(days, &c.y, &m, &d);
+  c.m = static_cast<int>(m);
+  c.d = static_cast<int>(d);
   c.hh = static_cast<int>(rem / 3600);
   c.mm2 = static_cast<int>((rem % 3600) / 60);
   c.ss = static_cast<int>(rem % 60);
-  c.wday = static_cast<int>((days + 4) % 7);
+  c.wday = wdayFromDays(days);
   return c;
 }
 
 inline const char* weekdayHan(int wday) {
   static const char* W[7] = {"週日", "週一", "週二", "週三", "週四", "週五", "週六"};
-  return W[wday % 7];
+  return W[((wday % 7) + 7) % 7];
 }
 
 inline void formatDateTW(const char* date, char* buf, int cap) {
@@ -254,7 +264,7 @@ inline void formatDateTW(const char* date, char* buf, int cap) {
   int mo = (date[4] - '0') * 10 + (date[5] - '0');
   int da = (date[6] - '0') * 10 + (date[7] - '0');
   int64_t days = daysFromCivil(y, mo, da);
-  int wday = static_cast<int>((days + 4) % 7);
+  int wday = wdayFromDays(days);
   snprintf(buf, cap, "%c%c-%c%c %s", date[4], date[5], date[6], date[7], weekdayHan(wday));
 }
 
