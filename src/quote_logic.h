@@ -273,4 +273,90 @@ inline void dateOfEpoch(uint32_t utc, int tz, char* buf, int cap) {
   snprintf(buf, cap, "%04d%02d%02d", c.y, c.m, c.d);
 }
 
+// ---- 排程（spec 修訂三版狀態機）----
+enum class MarketState { PreMarket, Trading, PostClose, Weekend };
+
+inline MarketState marketState(uint32_t utc) {
+  Civil c = civilFromEpoch(utc, TZ_TW);
+  int secs = c.hh * 3600 + c.mm2 * 60 + c.ss;
+  if (c.wday == 0 || c.wday == 6) return MarketState::Weekend;
+  if (secs >= 9 * 3600 && secs < 13 * 3600 + 30 * 60) return MarketState::Trading;
+  if (secs < 9 * 3600) return MarketState::PreMarket;
+  return MarketState::PostClose;
+}
+
+inline uint32_t atLocalTime(uint32_t utcNow, int dayOffset, int hh, int minute) {
+  Civil c = civilFromEpoch(utcNow, TZ_TW);
+  int64_t days = daysFromCivil(c.y, c.m, c.d) + dayOffset;
+  return static_cast<uint32_t>(days * 86400 + hh * 3600 + minute * 60 - TZ_TW);
+}
+
+inline uint32_t todayAt9(uint32_t utcNow) { return atLocalTime(utcNow, 0, 9, 0); }
+inline uint32_t nextDayAt9(uint32_t utcNow) { return atLocalTime(utcNow, 1, 9, 0); }
+
+inline uint32_t nextWeekdayAt9(uint32_t utcNow) {
+  for (int off = 1; off <= 7; off++) {
+    uint32_t t = atLocalTime(utcNow, off, 9, 0);
+    Civil c = civilFromEpoch(t, TZ_TW);
+    if (c.wday >= 1 && c.wday <= 5) return t;
+  }
+  return nextDayAt9(utcNow);  // 不可達
+}
+
+// 5 分邊界對齊＋最小安全等待 30s（spec R1）
+inline uint32_t nextTradingBoundary(uint32_t utcNow) {
+  uint32_t aligned = utcNow - (utcNow % 300) + 300;
+  if (aligned - utcNow < 30) aligned += 300;
+  return aligned;
+}
+
+// 單段睡眠上限 24h（超過由呼叫端喚醒後重算，分段）
+inline uint32_t capSleep(uint32_t now, uint32_t target) {
+  if (target <= now) return 1;
+  uint32_t delta = target - now;
+  return delta > 86400 ? 86400 : delta;
+}
+
+// ---- NVS blob（單一 versioned record，spec 修訂四版）----
+static const uint32_t BLOB_VERSION = 1;
+
+struct QuoteRecord {
+  uint32_t version;
+  QuoteRow rows[5];
+  char quoteDate[9];      // 快取交易日（YYYYMMDD）
+  char quoteTime[9];      // 5 列最新有效 t
+  char lastCloseDate[9];  // 收盤定格旗標（""=未定格）
+  uint32_t savedEpoch;    // 最後持久化時間（UTC）
+};
+
+inline bool recordSane(const QuoteRecord& r) {
+  if (r.version != BLOB_VERSION) return false;
+  if (!validDate(r.quoteDate) || !validTime(r.quoteTime)) return false;
+  if (r.lastCloseDate[0] != '\0' && !validDate(r.lastCloseDate)) return false;
+  for (int i = 0; i < 5; i++) {
+    if (strcmp(r.rows[i].code, EXPECT_CODES[i]) != 0) return false;
+    if (!std::isfinite(r.rows[i].z) || !std::isfinite(r.rows[i].y)) return false;
+    if (r.rows[i].y == 0.0) return false;
+    if (!validTime(r.rows[i].t)) return false;
+  }
+  return true;
+}
+
+// write-on-change：僅 rows/quoteDate/lastCloseDate 參與比較
+// （quoteTime/savedEpoch 單獨變更不觸發寫入——spec 修訂四版）
+// 逐欄位比較——QuoteRow 含 padding，禁止以 memcmp 做語意比較
+// （兩側 doubles 皆由同一來源字串解析，== 比較成立）
+// putBytes 二進位儲存保留；layout 變動時 BLOB_VERSION 必須遞增
+inline bool recordDiffers(const QuoteRecord& a, const QuoteRecord& b) {
+  for (int i = 0; i < 5; i++) {
+    if (strcmp(a.rows[i].code, b.rows[i].code) != 0) return true;
+    if (a.rows[i].z != b.rows[i].z) return true;
+    if (a.rows[i].y != b.rows[i].y) return true;
+    if (strcmp(a.rows[i].t, b.rows[i].t) != 0) return true;
+  }
+  if (strncmp(a.quoteDate, b.quoteDate, 9) != 0) return true;
+  if (strncmp(a.lastCloseDate, b.lastCloseDate, 9) != 0) return true;
+  return false;
+}
+
 }  // namespace qlogic

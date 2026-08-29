@@ -189,6 +189,89 @@ static void testFormatDateInvalid() {
   printf("formatDate invalid ok\n");
 }
 
+static void testSchedule() {
+  using qlogic::marketState;
+  // 2026-08-28 = 週五；00:00 台北 = 1787846400 UTC
+  uint32_t fri00 = 1787846400u;
+  assert(marketState(fri00 + 7 * 3600) == qlogic::MarketState::PreMarket);
+  assert(marketState(fri00 + 9 * 3600) == qlogic::MarketState::Trading);
+  assert(marketState(fri00 + 13 * 3600 + 29 * 60) == qlogic::MarketState::Trading);
+  assert(marketState(fri00 + 13 * 3600 + 30 * 60) == qlogic::MarketState::PostClose);
+  assert(marketState(fri00 + 2 * 86400) == qlogic::MarketState::Weekend);  // 週日
+  assert(marketState(fri00 + 86400) == qlogic::MarketState::Weekend);      // 週六
+
+  // PRE_MARKET → 當日 09:00
+  assert(qlogic::todayAt9(fri00 + 7 * 3600) == fri00 + 9 * 3600);
+
+  // POST_CLOSE 週五 14:00 → 次交易日（週一）09:00
+  uint32_t fri14 = fri00 + 14 * 3600;
+  assert(qlogic::nextWeekdayAt9(fri14) == fri00 + 3 * 86400 + 9 * 3600);
+
+  // 週六 10:00 → 週一 09:00
+  assert(qlogic::nextWeekdayAt9(fri00 + 86400 + 10 * 3600) == fri00 + 3 * 86400 + 9 * 3600);
+
+  // 週三 14:00 → 週四 09:00
+  uint32_t wed14 = fri00 - 2 * 86400 + 14 * 3600;
+  assert(qlogic::nextWeekdayAt9(wed14) == fri00 - 86400 + 9 * 3600);
+
+  // 假日（TRADING 中 d!=today）→ 隔日 09:00（含跨週末場景由呼叫端決定）
+  assert(qlogic::nextDayAt9(fri00 + 10 * 3600) == fri00 + 86400 + 9 * 3600);
+
+  // 5 分邊界：09:02:10 → 09:05:00（170s）；09:04:50 → 跳 09:10（310s，最小 30s）
+  uint32_t t1 = fri00 + 9 * 3600 + 2 * 60 + 10;
+  assert(qlogic::nextTradingBoundary(t1) - t1 == 170);
+  uint32_t t2 = fri00 + 9 * 3600 + 4 * 60 + 50;
+  assert(qlogic::nextTradingBoundary(t2) - t2 == 310);
+
+  // 24h cap
+  assert(qlogic::capSleep(fri00, fri00 + 3 * 86400 + 9 * 3600) == 86400);
+  assert(qlogic::capSleep(fri00, fri00 + 100) == 100);
+  printf("schedule ok\n");
+}
+
+static void testBlob() {
+  qlogic::QuoteRecord a = {};
+  a.version = qlogic::BLOB_VERSION;
+  for (int i = 0; i < 5; i++) {
+    strcpy(a.rows[i].code, qlogic::EXPECT_CODES[i]);
+    a.rows[i].z = 10.0 + i;
+    a.rows[i].y = 9.0 + i;
+    strcpy(a.rows[i].t, "13:30:00");
+  }
+  strcpy(a.quoteDate, "20260828");
+  strcpy(a.quoteTime, "13:30:00");
+  a.savedEpoch = 1787894400u;
+
+  qlogic::QuoteRecord b = a;
+  assert(!qlogic::recordDiffers(a, b));
+  b.rows[1].z = 2420.0;
+  assert(qlogic::recordDiffers(a, b));       // 價格變更
+  b = a; strcpy(b.quoteDate, "20260831");
+  assert(qlogic::recordDiffers(a, b));       // 交易日變更
+  b = a; strcpy(b.lastCloseDate, "20260828");
+  assert(qlogic::recordDiffers(a, b));       // 定格旗標變更
+  b = a; strcpy(b.quoteTime, "13:31:00");
+  assert(!qlogic::recordDiffers(a, b));      // 僅時間變更不寫（spec 修訂四）
+  b = a; b.savedEpoch++;
+  assert(!qlogic::recordDiffers(a, b));      // 僅 savedEpoch 不寫
+
+  assert(qlogic::recordSane(a));
+  b = a; b.version = 2;
+  assert(!qlogic::recordSane(b));
+  b = a; b.rows[3].y = 0.0;
+  assert(!qlogic::recordSane(b));
+  b = a; strcpy(b.quoteDate, "2026-8-28");
+  assert(!qlogic::recordSane(b));
+
+  // 序列化 roundtrip（putBytes 語意）
+  char bytes[sizeof(qlogic::QuoteRecord)];
+  memcpy(bytes, &a, sizeof a);
+  qlogic::QuoteRecord c;
+  memcpy(&c, bytes, sizeof c);
+  assert(memcmp(&a, &c, sizeof a) == 0);
+  printf("blob ok\n");
+}
+
 int main() {
   testParseNum();
   testValidDate();
@@ -199,6 +282,8 @@ int main() {
   testFormatPrice();
   testCivil();
   testFormatDateInvalid();
+  testSchedule();
+  testBlob();
   printf("ALL PASS\n");
   return 0;
 }
