@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "ui.h"
 
 struct WatchItem {
   const char* code;   // API c 欄位
@@ -15,7 +16,23 @@ static const WatchItem WATCHLIST[] = {
   {"006208", "富邦台50"},
 };
 static const int WATCH_N = 5;
+static_assert(WATCH_N == QUOTE_ROWS, "watchlist size mismatch");
 
-// ex_ch 參數（與 WATCHLIST 同集合）
-static const char* QUOTE_EX_CH =
-  "tse_t00.tw|tse_2330.tw|tse_2317.tw|tse_0050.tw|tse_006208.tw";
+// ex_ch 參數：由 WATCHLIST 組裝（單一資料源）。
+// v1 全數為 TWSE 上市股票→固定 tse_ 前綴＋.tw 後綴；新增 TPEx 標的時須改為逐列指定 ex。
+// 回傳內部 static 緩衝（首次呼叫組裝），呼叫端僅讀取；非執行緒安全（v1 單執行緒）。
+inline const char* quoteExCh() {
+  static char buf[96];
+  static bool built = false;
+  if (!built) {
+    buf[0] = '\0';
+    for (int i = 0; i < WATCH_N; i++) {
+      if (i > 0) strlcat(buf, "|", sizeof buf);
+      strlcat(buf, "tse_", sizeof buf);
+      strlcat(buf, WATCHLIST[i].code, sizeof buf);
+      strlcat(buf, ".tw", sizeof buf);
+    }
+    built = true;
+  }
+  return buf;
+}

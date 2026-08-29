@@ -40,7 +40,7 @@ int quoteFetch(qlogic::MarketBatch* out) {
   http.setConnectTimeout(10000);
   http.setTimeout(15000);
   String url = String("https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=") +
-               QUOTE_EX_CH + "&json=1";
+               quoteExCh() + "&json=1";
   if (!http.begin(client, url)) return -10;
   http.useHTTP10(true);                    // HTTP/1.0：無 chunked，原始位元組流
   http.addHeader("User-Agent", "esp32-eink-quote/1.0");

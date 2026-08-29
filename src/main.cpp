@@ -35,6 +35,18 @@ void setup() {
     LOGF("save=%d\n", quoteRecordSave(&rec, (uint32_t)time(nullptr)));
     qlogic::QuoteRecord back;
     LOGF("load=%d\n", quoteRecordLoad(&back));
+
+    QuoteView v = {};
+    for (int i = 0; i < WATCH_N; i++) {
+      v.names[i] = WATCHLIST[i].name;
+      qlogic::QuoteCalc c = qlogic::calcQuote(mb.rows[i].z, mb.rows[i].y);
+      v.z[i] = mb.rows[i].z;
+      v.chg[i] = c.chg;
+      v.pct[i] = c.pct;
+    }
+    qlogic::formatDateTW(mb.date, v.dateStr, sizeof v.dateStr);
+    strcpy(v.timeStr, "13:33");   // harness 固定值；正式路徑於 Task 7
+    uiShowQuotes(v);
   }
 }
 
