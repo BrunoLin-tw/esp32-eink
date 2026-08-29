@@ -1,8 +1,8 @@
 # 報價看板設計規格（Quote Board v1）
 
-- 日期：2026-08-29（修訂五版：併入 P0-1~4、R1~5、繪製層改 GxEPD2 rotation、
+- 日期：2026-08-29（修訂六版：併入 P0-1~4、R1~5、繪製層改 GxEPD2 rotation、
   POST_CLOSE 休市日分支、NTP 失敗路徑、NVS quoteDate 與快取時間語意、
-  TLS 主要路徑改釘選根 CA）
+  TLS 改釘選根 CA、MENU 套用休市/定格結果與逐欄位比較註記）
 - 狀態：已核准（brainstorming 完成、規格審查修訂完成）
 - 前置：天氣看板（`weather-v1`，Wi-Fi/NTP/JSON/深睡管線已驗證）、SD 相框（`photo-frame-v1`，現行 master，互動/NVS 紀律已驗證）
 
@@ -160,7 +160,9 @@ U8g2 內建中文字型僅 16px；20px／28px 名稱需自製**子集**字型：
   - 已定格（`lastCloseDate == today`）→ 直接長睡眠。
 - **MENU（GPIO2）＝立即更新（例外路徑）**：任何狀態按下 → 立即抓取渲染
   （失敗則顯示快取＋「更新失敗」）→ 依**現狀態**回歸該排程
-  （`TRADING` 回下一 5 分邊界；`PRE_MARKET` 睡回當日 09:00；餘類推）。
+  （`TRADING` 回下一 5 分邊界；`PRE_MARKET` 睡回當日 09:00；餘類推）；
+  **休市日成功回應同樣套用休市結果**（`TRADING` 時段 → 睡至隔日 09:00，
+  不落回短週期）；`POST_CLOSE` 成功（`d == today`）**順帶完成定格旗標**。
 - **5 分邊界對齊（R1）**：`TRADING` 睡眠時長＝`next = floor(epoch/300)*300 + 300 - now`；
   若單輪工作後已越過邊界則取再下一邊界；**最小安全等待 30 s**（不足則順延一個邊界）。
 - **按鍵卡住防護（R4）**：醒來先解除控制線 hold；`waitButtonsReleased` 等待放開；
@@ -189,6 +191,8 @@ U8g2 內建中文字型僅 16px；20px／28px 名稱需自製**子集**字型：
 - 寫入時機：成功抓取且（任一報價欄位 **或** `quoteDate` **或**
   `lastCloseDate` 變更）才寫；**`quoteTime`/`savedEpoch` 單獨變更不觸發寫入**
   （降低 flash 磨耗；成功畫面仍渲染本次新鮮值，僅快取保持舊值）。
+  比較採**逐欄位**（代碼/時間 `strcmp`、數值 `==`；`QuoteRow` 含 padding，
+  **禁用 memcmp** 語意比較）；blob layout 變動須遞增 `version`。
 - `savedEpoch`：隨每次寫入更新為當下時間——語意＝最後**持久化**時間，
   非最後成功抓取時間。
 - 載入驗證：version 符合、長度正確、欄位 sanity（數字有效、
@@ -224,7 +228,8 @@ host 端（不需硬體）：
 
 硬體（逐項記錄結果與時間戳）：
 8. 開機：Wi-Fi 連線＋NTP 對時成功。
-9. TLS handshake 經 bundle 成功（若失敗→備案釘選 CA）。
+9. TLS handshake 以**釘選 TWCA Global Root CA** 成功，並確認到期資訊
+   （2030-12-31）記錄於 `src/twse_root_ca.h`。
 10. 直立顯示方向正確（header 在頂、文字正立；golden test 四角落對應）。
 11. 中文名稱 20px/28px 渲染正確無缺字。
 12. 報價數值與證交所網頁一致（2330/2317/0050/006208/指數）。

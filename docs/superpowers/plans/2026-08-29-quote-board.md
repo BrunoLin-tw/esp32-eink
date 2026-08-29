@@ -8,7 +8,7 @@
 
 **Tech Stack:** PlatformIO + Arduino core ESP32 2.0.17（不動）、GxEPD2@1.6.9、U8g2_for_Adafruit_GFX@1.8.0、**重新引入 ArduinoJson@7.4.3**、Pillow+u8g2 bdfconv（字型子集工具）、g++（host 測試）。
 
-**規格：** `docs/superpowers/specs/2026-08-29-quote-board-design.md`（修訂四版＋TLS 釘選修訂）
+**規格：** `docs/superpowers/specs/2026-08-29-quote-board-design.md`（修訂六版）
 **平台工具：** `/tmp/opencode/pio-venv/bin/pio`；host 測試用 `g++ -std=c++17`。
 
 **分支與合併慣例**（同相框）：從 master 開 `feature/quote-board`；每 Task 硬體檢查點由**使用者上機**回報後才 commit；commit 訊息 zh-TW，末行「驗證等級：…」。完成後合併回 master、標籤 `quote-v1`。
@@ -216,10 +216,10 @@ ArduinoJson@7.4.3；新增 watchlist 與 secrets 範本；ui/main 改
 - Create（產出、入庫）: `src/fonts_quote.c`, `src/fonts_quote.h`
 - Toolchain: u8g2 `bdfconv`（clone 至 `/tmp/opencode/u8g2` 並編譯）
 
-- [ ] **Step 1: 取得並編譯 bdfconv**
+- [ ] **Step 1: 取得並編譯 bdfconv（固定版本 2.37.1，可重現性契約）**
 
 ```bash
-git clone --depth 1 https://github.com/olikraus/u8g2 /tmp/opencode/u8g2
+git clone --depth 1 --branch 2.37.1 https://github.com/olikraus/u8g2 /tmp/opencode/u8g2
 make -C /tmp/opencode/u8g2/tools/bdfconv
 ls -la /tmp/opencode/u8g2/tools/bdfconv/bdfconv   # Expected: 執行檔存在
 ```
@@ -231,12 +231,14 @@ ls -la /tmp/opencode/u8g2/tools/bdfconv/bdfconv   # Expected: 執行檔存在
 """產生報價看板 U8g2 中文子集字型（PIL 渲染 → BDF → bdfconv → .c）。
 
 可重現性契約（spec R5）：
-- 字型來源：Noto Sans CJK Bold（/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc，
-  套件 fonts-noto-cjk），授權 SIL OFL 1.0
-- 產出檔頭記錄：字型檔 sha256、PIL 版本、bdfconv git rev
+- 字型來源：限 OFL 授權之 Noto Sans CJK Bold（禁用 PingFang 等系統字）
+  探測路徑見 CANDIDATES；--font 可覆寫；產出檔頭記錄路徑＋sha256＋PIL/bdfconv 版本
+- bdfconv 來源：u8g2 tag 2.37.1（clone --branch 2.37.1）
 - glyph manifest 明列於下方常數（禁止隱式掃描）
 - 產出 .c 提交 repo；僅 manifest 變更時重跑本工具
+- 自檢：每 glyph 的 hex row 數必等於 BBX h；bdfconv 非零回傳即中止
 """
+import argparse
 import hashlib
 import os
 import subprocess
@@ -245,7 +247,11 @@ import sys
 from PIL import Image, ImageDraw, ImageFont
 import PIL
 
-NOTO = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
+CANDIDATES = [
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",       # Linux
+    "/opt/homebrew/share/fonts/noto/NotoSansCJK-Bold.ttc",       # macOS Homebrew
+    "/usr/local/share/fonts/noto/NotoSansCJK-Bold.ttc",          # macOS 手動安裝
+]
 U8G2_DIR = "/tmp/opencode/u8g2"
 BDFCONV = os.path.join(U8G2_DIR, "tools/bdfconv/bdfconv")
 OUT_C = "src/fonts_quote.c"
@@ -258,8 +264,19 @@ G28 = "加權指數"
 MANIFEST = {16: G16, 20: G20, 28: G28}
 
 
-def build_bdf(size: int, chars: str, path: str) -> None:
-    font = ImageFont.truetype(NOTO, size)
+def resolve_font(cli_font: str | None) -> str:
+    if cli_font:
+        if not os.path.exists(cli_font):
+            sys.exit(f"--font 指定路徑不存在：{cli_font}")
+        return cli_font
+    for p in CANDIDATES:
+        if os.path.exists(p):
+            return p
+    sys.exit("找不到 Noto Sans CJK Bold；請以 --font 指定 OFL 授權之字型路徑")
+
+
+def build_bdf(size: int, chars: str, path: str, font_path: str) -> None:
+    font = ImageFont.truetype(font_path, size)
     ascent, _descent = font.getmetrics()
     canvas_h = size + 8
     lines = [
@@ -277,14 +294,14 @@ def build_bdf(size: int, chars: str, path: str) -> None:
         bbox = img.getbbox()
         dw = max(1, round(font.getlength(ch)))
         if bbox is None:
-            # 空白類 glyph（如空格）：BDF 允許 0x0 bitmap
+            # 空白類 glyph（如空格）：BBX 0 0、BITMAP 後無 hex row
             lines += [
                 f"STARTCHAR u{cp:04X}",
                 f"ENCODING {cp}",
                 "SWIDTH 0 0",
                 f"DWIDTH {dw} 0",
                 "BBX 0 0 0 0",
-                "BITMAP 0",
+                "BITMAP",
                 "ENDCHAR",
             ]
             continue
@@ -297,7 +314,7 @@ def build_bdf(size: int, chars: str, path: str) -> None:
             bits = "".join("1" if pix[rx, ry] else "0" for rx in range(w))
             bits = bits.ljust(stride * 8, "0")
             hexrows.append("".join(f"{int(bits[i*8:(i+1)*8], 2):02X}" for i in range(stride)))
-        dw = max(1, round(font.getlength(ch)))
+        assert len(hexrows) == h, f"{ch!r}: hex rows {len(hexrows)} != BBX h {h}"
         yoff = (2 + ascent) - y1  # BDF y 向上為正：bitmap 底緣距 baseline
         lines += [
             f"STARTCHAR u{cp:04X}",
@@ -305,7 +322,7 @@ def build_bdf(size: int, chars: str, path: str) -> None:
             "SWIDTH 0 0",
             f"DWIDTH {dw} 0",
             f"BBX {w} {h} {x0 - 2} {yoff}",
-            f"BITMAP {stride * 8}",
+            "BITMAP",
             *hexrows,
             "ENDCHAR",
         ]
@@ -318,7 +335,7 @@ def run_bdfconv(bdf: str, out_c: str, name: str) -> None:
     r = subprocess.run([BDFCONV, bdf, "-o", out_c, "-n", name],
                        capture_output=True, text=True)
     if r.returncode != 0:
-        sys.exit(f"bdfconv failed: {r.stderr}")
+        sys.exit(f"bdfconv failed (rc={r.returncode}): {r.stderr}")
 
 
 def extract_array(c_path: str) -> str:
@@ -329,12 +346,16 @@ def extract_array(c_path: str) -> str:
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--font", help="覆寫字型路徑（限 OFL 授權之 Noto CJK）")
+    args = ap.parse_args()
     if not os.path.exists(BDFCONV):
         sys.exit("bdfconv 不存在，先執行 Step 1")
+    font_path = resolve_font(args.font)
     os.makedirs("src", exist_ok=True)
-    sha = hashlib.sha256(open(NOTO, "rb").read()).hexdigest()
+    sha = hashlib.sha256(open(font_path, "rb").read()).hexdigest()
     try:
-        rev = subprocess.run(["git", "-C", U8G2_DIR, "rev-parse", "--short", "HEAD"],
+        rev = subprocess.run(["git", "-C", U8G2_DIR, "describe", "--tags"],
                              capture_output=True, text=True).stdout.strip()
     except Exception:
         rev = "unknown"
@@ -342,7 +363,7 @@ def main() -> None:
     for size, chars in MANIFEST.items():
         bdf = f"/tmp/opencode/quote{size}.bdf"
         tmp_c = f"/tmp/opencode/quote{size}.c"
-        build_bdf(size, chars, bdf)
+        build_bdf(size, chars, bdf, font_path)
         # 自檢：BDF 含全部 manifest glyph
         body = open(bdf).read()
         missing = [c for c in chars if f"ENCODING {ord(c)}\n" not in body]
@@ -350,10 +371,10 @@ def main() -> None:
             sys.exit(f"size {size} 缺 glyph: {missing}")
         run_bdfconv(bdf, tmp_c, f"u8g2_font_quote{size}")
         parts.append(extract_array(tmp_c))
-        print(f"size {size}: {len(chars)} glyphs ok")
+        print(f"size {size}: {len(chars)} glyphs ok (bdfconv rc=0)")
     banner = (
         "// 自動產生：tools/gen_fonts.py（勿手改）\n"
-        f"// font: Noto Sans CJK Bold sha256={sha[:16]}... (SIL OFL 1.0)\n"
+        f"// font: {font_path} sha256={sha[:16]}... (SIL OFL 1.0)\n"
         f"// PIL {PIL.__version__}, bdfconv u8g2@{rev}\n"
         "#include <stdint.h>\n"
         "#ifndef U8G2_FONT_SECTION\n"
@@ -415,8 +436,8 @@ PIL 渲染 Noto CJK Bold → BDF → bdfconv → .c；manifest 明列
 - [ ] **Step 1: 寫失敗測試 `tests/host/test_quote_logic.cpp`**
 
 ```cpp
-// host 測試：g++ -std=c++17 -I src tests/host/test_quote_logic.cpp -o /tmp/opencode/test_quote_logic
-#include "../src/quote_logic.h"
+// host 測試：g++ -std=c++17 -I src -I .pio/libdeps/esp32eink/ArduinoJson/src tests/host/test_quote_logic.cpp
+#include "quote_logic.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -1019,7 +1040,7 @@ static void testBlob() {
 
 - [ ] **Step 2: 執行確認失敗**
 
-Run: `g++ -std=c++17 -I src tests/host/test_quote_logic.cpp -o /tmp/opencode/test_quote_logic && /tmp/opencode/test_quote_logic`
+Run: `g++ -std=c++17 -I src -I .pio/libdeps/esp32eink/ArduinoJson/src tests/host/test_quote_logic.cpp -o /tmp/opencode/test_quote_logic && /tmp/opencode/test_quote_logic`
 Expected: FAIL（`marketState`/`recordDiffers` 未定義）
 
 - [ ] **Step 3: 實作（附加至 `qlogic` namespace 末尾）**
@@ -1096,8 +1117,16 @@ inline bool recordSane(const QuoteRecord& r) {
 
 // write-on-change：僅 rows/quoteDate/lastCloseDate 參與比較
 // （quoteTime/savedEpoch 單獨變更不觸發寫入——spec 修訂四版）
+// 逐欄位比較——QuoteRow 含 padding，禁止以 memcmp 做語意比較
+// （兩側 doubles 皆由同一來源字串解析，== 比較成立）
+// putBytes 二進位儲存保留；layout 變動時 BLOB_VERSION 必須遞增
 inline bool recordDiffers(const QuoteRecord& a, const QuoteRecord& b) {
-  if (memcmp(a.rows, b.rows, sizeof(a.rows)) != 0) return true;
+  for (int i = 0; i < 5; i++) {
+    if (strcmp(a.rows[i].code, b.rows[i].code) != 0) return true;
+    if (a.rows[i].z != b.rows[i].z) return true;
+    if (a.rows[i].y != b.rows[i].y) return true;
+    if (strcmp(a.rows[i].t, b.rows[i].t) != 0) return true;
+  }
   if (strncmp(a.quoteDate, b.quoteDate, 9) != 0) return true;
   if (strncmp(a.lastCloseDate, b.lastCloseDate, 9) != 0) return true;
   return false;
@@ -1108,7 +1137,7 @@ inline bool recordDiffers(const QuoteRecord& a, const QuoteRecord& b) {
 
 - [ ] **Step 4: 執行測試確認通過**
 
-Run: `g++ -std=c++17 -I src tests/host/test_quote_logic.cpp -o /tmp/opencode/test_quote_logic && /tmp/opencode/test_quote_logic`
+Run: `g++ -std=c++17 -I src -I .pio/libdeps/esp32eink/ArduinoJson/src tests/host/test_quote_logic.cpp -o /tmp/opencode/test_quote_logic && /tmp/opencode/test_quote_logic`
 Expected: `ALL PASS`（含新群組 `schedule ok`／`blob ok`）
 
 - [ ] **Step 5: Commit**
@@ -1205,7 +1234,8 @@ bool quoteWifiBegin(uint32_t timeoutMs);
 // NTP 對時（configTime + getLocalTime）；成功後 time(nullptr) 可用
 bool quoteNtpSync(uint32_t timeoutMs);
 // HTTPS 抓取＋解析＋欄位驗證（all-or-nothing）
-// 回 0=成功（out 填入）；<0：-1 transport -2 HTTP非200 -3 size
+// 回 0=成功（out 填入）；<0 transport 區間（不與 V_* 重疊）：
+//   -10 begin 失敗、-11 非 200、-12 body 空/超 32KB 上限
 //   或 quote_logic 之 V_STRUCT(-1)/V_NUMERIC(-2)/V_FORMAT(-3)/V_DATE_DIFF(-4)/V_JSON(-5)
 int quoteFetch(qlogic::MarketBatch* out);
 // NVS blob（單一 key quote:rec；putBytes）
@@ -1221,7 +1251,6 @@ bool quoteRecordSave(qlogic::QuoteRecord* rec, uint32_t nowUtc);
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <ArduinoJson.h>
 #include <Preferences.h>
 #include "log.h"
 #include "watchlist.h"
@@ -1260,31 +1289,53 @@ int quoteFetch(qlogic::MarketBatch* out) {
   http.setTimeout(15000);
   String url = String("https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=") +
                QUOTE_EX_CH + "&json=1";
-  if (!http.begin(client, url)) return -1;
-  http.useHTTP10(true);                    // HTTP/1.0：避免 chunked 與 ArduinoJson 衝突
+  if (!http.begin(client, url)) return -10;
+  http.useHTTP10(true);                    // HTTP/1.0：無 chunked，原始位元組流
   http.addHeader("User-Agent", "esp32-eink-quote/1.0");
   int code = http.GET();
   if (code != 200) {
     LOGF("[fail] http %d\n", code);
     http.end();
-    return -2;
+    return -11;
   }
   int len = http.getSize();
   if (len > 32768) {
-    LOGF("[fail] http size %d\n", len);
+    LOGF("[fail] content-length %d over cap\n", len);
     http.end();
-    return -3;
+    return -12;
   }
-  // len==-1（無 Content-Length）可接受；讀完後以下列檢查守住 32KB 上限
-  String body = http.getString();
+  // 有界讀取（spec P0：上限必須在資料進入 String/JsonDocument 前生效）：
+  // 固定 32KB 緩衝逐段讀，超限即截斷→失敗；len==-1（無 Content-Length）亦受此保護
+  static char body[32769];                 // 32768 資料 + NUL（BSS，不佔 stack）
+  int total = 0;
+  WiFiClient* stream = http.getStreamPtr();
+  uint32_t t0 = millis();
+  while ((http.connected() || stream->available()) && total < 32768 &&
+         millis() - t0 < 15000) {
+    int avail = stream->available();
+    if (avail > 0) {
+      int want = (32768 - total) < avail ? (32768 - total) : avail;
+      int n = stream->read((uint8_t*)(body + total), (size_t)want);
+      if (n <= 0) break;
+      total += n;
+    } else {
+      delay(2);
+      yield();
+    }
+  }
   http.end();
-  if (body.length() == 0 || body.length() > 32768) {
-    LOGF("[fail] body len %u\n", (unsigned)body.length());
-    return -3;
+  if (total <= 0) {
+    LOGF("[fail] empty body\n");
+    return -12;
   }
+  if (total >= 32768) {
+    LOGF("[fail] body over 32KB cap\n");
+    return -12;
+  }
+  body[total] = '\0';
 
   qlogic::RawBatch raw;
-  int pr = qlogic::parseJsonToRaw(body.c_str(), body.length(), &raw);
+  int pr = qlogic::parseJsonToRaw(body, total, &raw);
   if (pr != qlogic::V_OK) {
     LOGF("[fail] parse/collect %d\n", pr);
     return pr;
@@ -1462,14 +1513,16 @@ void uiShowQuotes(const QuoteView& v) {
 
 void uiShowMessage(const char* l1, const char* l2) {
   if (!initialized) return;
+  // 英文訊息用 helv 字型（相框已驗證含完整 ASCII；logisoso 字集不保證全字母）
   display.setFullWindow();
   display.firstPage();
   do {
     display.fillScreen(GxEPD_WHITE);
     u8g2.setForegroundColor(GxEPD_BLACK);
-    u8g2.setFont(u8g2_font_logisoso22_tr);
+    u8g2.setFont(u8g2_font_helvB24_tf);
     u8g2.setCursor(16, 120);
     u8g2.print(l1);
+    u8g2.setFont(u8g2_font_helvR14_tf);
     u8g2.setCursor(16, 160);
     u8g2.print(l2);
   } while (display.nextPage());
@@ -1626,6 +1679,18 @@ static FetchResult fetchUpdate(uint32_t nowUtc, const char* todayStr) {
   return fr;
 }
 
+// 收盤定格寫入（PostClose 與 MENU 於收盤後成功共用）
+static void finalizeClose(const qlogic::MarketBatch& mb, const char* today,
+                          uint32_t nowUtc) {
+  qlogic::QuoteRecord rec = {};
+  rec.version = qlogic::BLOB_VERSION;
+  for (int i = 0; i < WATCH_N; i++) rec.rows[i] = mb.rows[i];
+  strcpy(rec.quoteDate, mb.date);
+  strcpy(rec.quoteTime, mb.quoteTime);
+  strcpy(rec.lastCloseDate, today);
+  quoteRecordSave(&rec, nowUtc);
+}
+
 // ---------- 睡眠 ----------
 static void goToDeepSleep(uint32_t targetUtc, bool enableExt1) {
   uint32_t now = (uint32_t)time(nullptr);
@@ -1734,26 +1799,43 @@ void setup() {
   qlogic::MarketState st = qlogic::marketState(now);
   LOGF("state=%d today=%s\n", (int)st, today);
 
-  // MENU 立即更新（任何狀態；spec 修訂三版例外路徑）
+  // MENU 立即更新（任何狀態；spec 修訂六版：休市日/定格結果與一般路徑同規則）
   if (menuWake) {
     FetchResult fr = fetchUpdate(now, today);
+    QuoteView v;
     if (fr.ok) {
       char qt[8];
       hhmm(fr.mb.quoteTime, qt);
-      QuoteView v;
       viewFromBatch(&v, fr.mb, qt, nullptr);
       uiShowQuotes(v);
-    } else {
-      qlogic::QuoteRecord cache;
-      if (loadCache(&cache)) {
-        char ts[8];
-        localHHMM(cache.savedEpoch, ts, sizeof ts);
-        QuoteView v;
-        viewFromRecord(&v, cache, ts, "更新失敗");
-        uiShowQuotes(v);
-      } else {
-        uiShowMessage("FETCH FAIL", "retry in 5 min");
+      if (st == qlogic::MarketState::Trading && !fr.isToday) {
+        // 假日手動更新 → 同樣睡至隔日 09:00（避免短週期）
+        goToDeepSleep(qlogic::nextDayAt9((uint32_t)time(nullptr)), !stuckGuard);
+        return;
       }
+      if (st == qlogic::MarketState::PostClose && fr.isToday) {
+        // 順帶完成收盤定格，避免次輪重抓
+        finalizeClose(fr.mb, today, (uint32_t)time(nullptr));
+      }
+      goToDeepSleep(longSleepTarget(st, (uint32_t)time(nullptr)), !stuckGuard);
+      return;
+    }
+    qlogic::QuoteRecord cache;
+    if (loadCache(&cache)) {
+      char ts[8];
+      localHHMM(cache.savedEpoch, ts, sizeof ts);
+      viewFromRecord(&v, cache, ts, "更新失敗");
+      uiShowQuotes(v);
+    } else {
+      uiShowMessage("FETCH FAIL", "retry in 5 min");
+    }
+    if (st == qlogic::MarketState::PreMarket || st == qlogic::MarketState::Weekend) {
+      goToDeepSleep(longSleepTarget(st, (uint32_t)time(nullptr)), !stuckGuard);
+    } else {
+      goToDeepSleep((uint32_t)time(nullptr) + 300, !stuckGuard);
+    }
+    return;
+  }
     }
     goToDeepSleep(longSleepTarget(st, (uint32_t)time(nullptr)), !stuckGuard);
     return;
@@ -1808,14 +1890,8 @@ void setup() {
       FetchResult fr = fetchUpdate(now, today);
       QuoteView v;
       if (fr.ok && fr.isToday) {
-        // 收盤定格：寫 lastCloseDate
-        qlogic::QuoteRecord rec = {};
-        rec.version = qlogic::BLOB_VERSION;
-        for (int i = 0; i < WATCH_N; i++) rec.rows[i] = fr.mb.rows[i];
-        strcpy(rec.quoteDate, fr.mb.date);
-        strcpy(rec.quoteTime, fr.mb.quoteTime);
-        strcpy(rec.lastCloseDate, today);
-        quoteRecordSave(&rec, (uint32_t)time(nullptr));
+        // 收盤定格：寫 lastCloseDate（共用 helper）
+        finalizeClose(fr.mb, today, (uint32_t)time(nullptr));
         char ts[8];
         localHHMM((uint32_t)time(nullptr), ts, sizeof ts);
         viewFromBatch(&v, fr.mb, ts, nullptr);
