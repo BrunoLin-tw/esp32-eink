@@ -1,6 +1,7 @@
 # 報價看板設計規格（Quote Board v1）
 
-- 日期：2026-08-29（修訂二版：併入規格審查 P0-1~4 與 R1~5）
+- 日期：2026-08-29（修訂三版：併入規格審查 P0-1~4、R1~5、繪製層改 GxEPD2 rotation、
+  POST_CLOSE 休市日分支、NTP 失敗路徑）
 - 狀態：已核准（brainstorming 完成、規格審查修訂完成）
 - 前置：天氣看板（`weather-v1`，Wi-Fi/NTP/JSON/深睡管線已驗證）、SD 相框（`photo-frame-v1`，現行 master，互動/NVS 紀律已驗證）
 
@@ -82,10 +83,18 @@
 
 ### 繪製層規則（旋轉）
 
-- **唯一 portrait 繪製層＝U8g2**：`setDisplayRotation()` 對其**所有**圖元生效
-  （文字、`drawTriangle`、`drawLine`、`drawBox`）；一律以邏輯 272x792 座標繪製。
-- **禁止**混用 GxEPD2/Adafruit_GFX 原始 `display.draw*()` 於邏輯座標。
-- 旋轉方向（`U8G2_R1`／`U8G2_R3`）於實機以「header 位於頂部、文字正立」確認。
+- **唯一旋轉層＝GxEPD2/Adafruit_GFX 的 `display.setRotation(1)`**（已查證：
+  `GxEPD2_GFX : public Adafruit_GFX`；U8g2_for_Adafruit_GFX adapter 之字形
+  亦經 `gfx->drawFastHLine/VLine` 寫入 GFX，故隨 setRotation 一致旋轉）。
+- UI 初始化契約：`display.setRotation(1)` 設定**一次**（先於所有繪製）、
+  `u8g2.begin(display)` 綁定同一 display，之後維持 `setFullWindow()`＋page loop。
+  init 後 `display.width()==272`、`display.height()==792`。
+- **所有圖元**（文字＝u8g2 adapter；線/框/漲跌三角形＝`display.drawLine/drawRect/
+  drawTriangle`）皆以**邏輯 272x792 座標**經同一已旋轉 display 繪製。
+- **禁止**手寫 272x792→792x272 座標映射；**禁止**同一幀內變更 rotation；
+  禁止使用 adapter 不存在的 `setDisplayRotation` 契約（那是 u8g2 core
+  自有 backend 的 API，非本 adapter 之契約）。
+- 方向確認（`setRotation(1)` vs `(3)`）於實機以「header 位於頂部、文字正立」擇定。
 
 ## 字型策略（本次新增工具鏈，已獲同意）
 
@@ -112,7 +121,7 @@ U8g2 內建中文字型僅 16px；20px／28px 名稱需自製**子集**字型：
 | --- | --- |
 | `src/main.cpp` | 狀態機：喚醒分流、市場狀態判定、睡眠排程、MENU 立即更新 |
 | `src/quote_store.h/.cpp` | Wi-Fi 連線、HTTPS 抓取（含 TLS 契約）、JSON 解析與欄位驗證、漲跌計算、NVS blob |
-| `src/ui.h/.cpp` | 直式版面渲染（僅經 U8g2 繪製層）、header、狀態字 |
+| `src/ui.h/.cpp` | 直式版面渲染（`display.setRotation(1)` 統一旋轉）、header、狀態字 |
 | `src/watchlist.h` | 標的清單常數（代碼＋`ex_ch`＋中文名） |
 | `src/secrets.h.example` | Wi-Fi 憑證範本（`secrets.h` 本機檔、gitignored） |
 | `src/twse_root_ca.h` | 備案用釘選 CA（僅於 bundle 失敗時啟用） |
@@ -135,9 +144,12 @@ U8g2 內建中文字型僅 16px；20px／28px 名稱需自製**子集**字型：
 
 - **假日判定僅限 `TRADING` 時段**：本次成功、五列完整有效之回應 `d != today`
   → 今日休市 → 睡到**隔日 09:00**。快取顯示與失敗路徑**永不**觸發假日判定。
-- **收盤定格**：`POST_CLOSE` 且 NVS `lastCloseDate != today` → 抓取一次；
-  成功且 `d == today` → 寫入 `lastCloseDate = today`、渲染定格；
-  失敗 → 5 分後重試（不掛長睡眠）。已定格（`lastCloseDate == today`）→ 直接長睡眠。
+- **收盤定格**：`POST_CLOSE` 且 NVS `lastCloseDate != today` → 抓取一次：
+  - 成功且 `d == today` → 寫入 `lastCloseDate = today`、渲染定格 → 長睡眠。
+  - **成功但 `d != today`（休市日）→「當日無交易資料」：渲染本次回應或快取，
+    睡至隔日 09:00**（不得落入 5 分重試迴圈；亦不寫 `lastCloseDate`）。
+  - 失敗（transport/TLS/HTTP/欄位驗證）→ 5 分後重試（不掛長睡眠）。
+  - 已定格（`lastCloseDate == today`）→ 直接長睡眠。
 - **MENU（GPIO2）＝立即更新（例外路徑）**：任何狀態按下 → 立即抓取渲染
   （失敗則顯示快取＋「更新失敗」）→ 依**現狀態**回歸該排程
   （`TRADING` 回下一 5 分邊界；`PRE_MARKET` 睡回當日 09:00；餘類推）。
@@ -150,6 +162,10 @@ U8g2 內建中文字型僅 16px；20px／28px 名稱需自製**子集**字型：
   已驗證流程與零遮罩 EXT1 清除，見 `docs/device-research.md`）。
 - 時間基準：NTP 同步之 epoch（RTC 於深睡中維持）；所有「睡到某時點」的時長以
   epoch 差值計算；**單段睡眠上限 24 小時，超過則分段**。
+- **NTP 失敗路徑**：NTP 同步或本地時間轉換失敗時，**不進行市場狀態判定、
+  不使用回應 `d` 判假日**（時間不可信）；有快取 → 顯示快取＋「時間未同步」，
+  無快取 → 錯誤畫面；之後 **5 分鐘短睡（timer＋EXT1）重試**（與天氣看板
+  可靠性策略一致）。
 - 失敗路徑：抓取失敗但無有效快取 → 錯誤畫面 → 5 分鐘重試（不掛長睡眠）。
 - 等待 BUSY 有 timeout 並讓出執行權；禁止無限阻斷等待。
 
@@ -178,10 +194,13 @@ host 端（不需硬體）：
 2. 漲跌計算（正/負/零、整數與小數）單元測試。
 3. JSON 解析＋欄位有效性（R2）：缺列/重複代碼、`z`/`y` 為 `-` 或空、`y==0`、
    `d`/`t` 格式錯誤 → 整批失敗。
-4. **旋轉 golden test**：邏輯四角落座標映射、▲▼三角形方向、文字 baseline、
-   框線完整性、272x792 邊界裁切——全部經唯一 U8g2 繪製層驗證。
+4. **旋轉 golden test**：以 `display.setRotation(1)` 為唯一旋轉層的資料路徑——
+   邏輯四角落座標映射、▲▼三角形方向、文字 baseline（adapter 經 GFX 繪製）、
+   框線完整性、272x792 邊界裁切。
 5. 睡眠排程單元測試：5 分邊界對齊（R1，含最小 30 s、越界跳下一邊界）、
-   `PRE_MARKET`→當日 09:00、`POST_CLOSE`→次交易日、六日→週一 09:00、
+   `PRE_MARKET`→當日 09:00、`POST_CLOSE`→次交易日、
+   **`POST_CLOSE` 休市日（成功但 `d != today`）→隔日 09:00、
+   NTP 失敗→5 分短睡不判定狀態**、六日→週一 09:00、
    24 小時分段。
 6. NVS blob：版本/長度/sanity 驗證、單次 putBytes、僅變更時寫入。
 7. `pio run` 編譯 SUCCESS。
@@ -202,6 +221,8 @@ host 端（不需硬體）：
 20. 卡鍵防護：按住 MENU 開機→stuck 偵測→timer-only 5 分→釋放後恢復 EXT1。
 21. 20+ 次連續 sleep/wake 無異常（無 Busy Timeout）。
 22. 收盤後按 MENU 仍可立即更新並回歸長睡眠。
+23. NTP 失敗模擬（防火牆擋 NTP）：顯示快取＋「時間未同步」、5 分短睡重試、不誤判假日。
+24. 休市日 13:30 後啟動：成功回應 `d != today` → 顯示後睡至隔日 09:00（無 5 分重試迴圈）。
 
 ## 里程碑
 
