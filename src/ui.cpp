@@ -1,6 +1,5 @@
 #include "ui.h"
 #include "log.h"
-#include "photo_store.h"
 #include <SPI.h>
 #include <GxEPD2_BW.h>
 #include <U8g2_for_Adafruit_GFX.h>
@@ -14,20 +13,12 @@
 #define EPD_BUSY 48
 #define EPD_PWR   7
 
-static const uint8_t* const F_TITLE = u8g2_font_helvB24_tf;
-static const uint8_t* const F_BODY  = u8g2_font_helvR14_tf;
-static const uint8_t* const F_SMALL = u8g2_font_helvR12_tf;
-
 GxEPD2_BW<GxEPD2_579_GDEY0579T93, GxEPD2_579_GDEY0579T93::HEIGHT> display(
     GxEPD2_579_GDEY0579T93(EPD_CS, EPD_DC, EPD_RST, EPD_BUSY));
 static U8G2_FOR_ADAFRUIT_GFX u8g2;
-
 static bool initialized = false;
 
-static const char* MENU_OPTIONS[] = {"OFF", "1 min", "5 min", "15 min", "30 min"};
-static const int MENU_COUNT = 5;
-
-void uiPowerOnInit() {
+void uiInit() {
   pinMode(EPD_PWR, OUTPUT);
   digitalWrite(EPD_PWR, HIGH);
   delay(50);
@@ -40,71 +31,24 @@ void uiPowerOnInit() {
   SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
   uint32_t t0 = millis();
   display.init(115200, true, 2, false);
-  LOGF("display init %lu ms\n", (unsigned long)(millis() - t0));
+  display.setRotation(1);   // 唯一旋轉層（spec 修訂三版）；init 一次
   u8g2.begin(display);
   initialized = true;
+  LOGF("display init %lu ms rot=%d w=%d h=%d\n", (unsigned long)(millis() - t0),
+       display.getRotation(), display.width(), display.height());
+  // 期望：rot=1 w=272 h=792
 }
 
-static void drawText(int x, int yBaseline, const uint8_t* font, const char* s) {
-  u8g2.setFont(font);
-  u8g2.setFontMode(1);
-  u8g2.setForegroundColor(GxEPD_BLACK);
-  u8g2.setCursor(x, yBaseline);
-  u8g2.print(s);
-}
-
-void uiShowPhoto() {
-  if (!initialized) return;
-  display.setFullWindow();   // 離開任何 partial 殘留狀態
-  display.firstPage();
-  do {
-    display.fillScreen(GxEPD_WHITE);
-    display.drawBitmap(0, 0, g_bitmap, 792, 272, GxEPD_BLACK);
-  } while (display.nextPage());
-}
-
-void uiShowMessage(const char* title, const char* detail) {
-  if (!initialized) return;
-  display.setFullWindow();
-  display.firstPage();
-  do {
-    display.fillScreen(GxEPD_WHITE);
-    drawText(40, 120, F_TITLE, title);
-    drawText(40, 170, F_BODY, detail);
-  } while (display.nextPage());
-}
-
-void uiMenuScreen(int cursor) {
-  if (!initialized) return;
-  display.setFullWindow();
-  display.firstPage();
-  do {
-    display.fillScreen(GxEPD_WHITE);
-    drawText(40, 80, F_TITLE, "SLIDESHOW");
-    for (int i = 0; i < MENU_COUNT; i++) {
-      char line[32];
-      snprintf(line, sizeof(line), "%s  %s", i == cursor ? ">" : " ",
-               MENU_OPTIONS[i]);
-      drawText(60, 130 + i * 26, F_BODY, line);
-    }
-    drawText(40, 260, F_SMALL, "UP/DOWN select  PRESS ok  (20s = ok)");
-  } while (display.nextPage());
-}
+void uiShowQuotes(const QuoteView& v) { (void)v; }
+void uiShowMessage(const char* l1, const char* l2) { (void)l1; (void)l2; }
 
 void uiHibernate() {
-  if (initialized) {
-    display.hibernate();
-    initialized = false;
-  }
-  digitalWrite(EPD_PWR, LOW);
+  if (!initialized) return;
+  display.hibernate();
 }
 
 void uiSleepHoldPins() {
-  pinMode(EPD_CS, OUTPUT);   digitalWrite(EPD_CS, LOW);
-  pinMode(EPD_DC, OUTPUT);   digitalWrite(EPD_DC, LOW);
-  pinMode(EPD_RST, OUTPUT);  digitalWrite(EPD_RST, LOW);
-  pinMode(EPD_SCK, OUTPUT);  digitalWrite(EPD_SCK, LOW);
-  pinMode(EPD_MOSI, OUTPUT); digitalWrite(EPD_MOSI, LOW);
+  digitalWrite(EPD_PWR, LOW);   // GPIO7 拉低（顯示器斷電）
   gpio_hold_en(GPIO_NUM_12);
   gpio_hold_en(GPIO_NUM_11);
   gpio_hold_en(GPIO_NUM_45);

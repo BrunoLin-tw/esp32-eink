@@ -6,6 +6,7 @@
 
 # 密鑰與憑證（AGENTS.md 密鑰規則：不得 commit Wi-Fi 憑證、API key、私鑰、token）
 secrets.h
+src/secrets.h
 credentials.h
 *.key
 *.pem

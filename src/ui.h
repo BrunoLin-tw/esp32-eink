@@ -1,21 +1,19 @@
 #pragma once
-#include <Arduino.h>
+#include <cstdint>
 
-// GPIO7 上電、SPI/display init、解除深睡 hold。
-void uiPowerOnInit();
+// 報價看板 UI（直式 272x792，display.setRotation(1) 統一旋轉）
+struct QuoteView {
+  const char* names[5];
+  double z[5];
+  double chg[5];
+  double pct[5];
+  char dateStr[20];    // "08-28 週五"
+  char timeStr[8];     // "13:33"
+  const char* status;  // nullptr=正常；"更新失敗"/"時間未同步"
+};
 
-// 全幅顯示 g_bitmap（白底＋黑色 drawBitmap）。
-void uiShowPhoto();
-
-// 全屏提示（NO PHOTOS / NO VALID PHOTOS / TOO MANY PHOTOS）。
-void uiShowMessage(const char* title, const char* detail);
-
-// 設定選單：title 為「SLIDESHOW」，options 為 OFF/1/5/15/30 MIN 字串陣列。
-// 游標變更時整頁重繪（此面板 partial 視窗有對齊問題，選單採 full refresh）。
-void uiMenuScreen(int cursor);
-
-// hibernate + GPIO7 低。
+void uiInit();
+void uiShowQuotes(const QuoteView& v);
+void uiShowMessage(const char* line1, const char* line2);
 void uiHibernate();
-
-// 深睡前控制線固定 LOW＋hold。
 void uiSleepHoldPins();
