@@ -40,11 +40,15 @@ void uiInit() {
 }
 
 void uiShowQuotes(const QuoteView& v) { (void)v; }
-void uiShowMessage(const char* l1, const char* l2) { (void)l1; (void)l2; }
+void uiShowMessage(const char* line1, const char* line2) {
+  (void)line1;
+  (void)line2;
+}
 
 void uiHibernate() {
   if (!initialized) return;
   display.hibernate();
+  initialized = false;   // 深睡前停用 guard，防 hibernate 後誤寫 SPI
 }
 
 void uiSleepHoldPins() {
