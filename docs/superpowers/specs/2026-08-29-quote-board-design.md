@@ -1,8 +1,8 @@
 # 報價看板設計規格（Quote Board v1）
 
-- 日期：2026-08-29（修訂六版：併入 P0-1~4、R1~5、繪製層改 GxEPD2 rotation、
-  POST_CLOSE 休市日分支、NTP 失敗路徑、NVS quoteDate 與快取時間語意、
-  TLS 改釘選根 CA、MENU 套用休市/定格結果與逐欄位比較註記）
+- 日期：2026-08-29（修訂七版：盤中未成交 z="-" 由整批拒絕改為該列記 0 並顯示
+  --；原因：2026-09-01 盤中實測，09:11 仍有 3/5 檔 z="-"，原政策造成開盤後
+  15-30 分鐘持續「更新失敗」。併入六版全部內容）
 - 狀態：已核准（brainstorming 完成、規格審查修訂完成）
 - 前置：天氣看板（`weather-v1`，Wi-Fi/NTP/JSON/深睡管線已驗證）、SD 相框（`photo-frame-v1`，現行 master，互動/NVS 紀律已驗證）
 
@@ -50,7 +50,8 @@
 對回應批次驗證，**任一列無效則整批視為失敗**（保留快取，禁止轉 0 渲染）：
 
 1. 5 個預期代碼（2330/2317/0050/006208/t00）各出現恰好一次（`c` 比對）。
-2. `z`、`y` 為有限數字且非 `-`／空值（盤中未成交可能出現）。
+2. `y` 為有限數字且非 `-`／空值。`z` 為有限數字，或恰為 `-`（盤中未成交，
+   修訂七版：該列以 z=0 記錄，UI 顯示 `--`，不得渲染為漲跌或價格 0）。
 3. `y != 0`。
 4. `d` 為 8 位數日期（YYYYMMDD）；`t` 為 `HH:MM:SS` 格式。
 5. 名稱 `n` 非空。
@@ -79,6 +80,8 @@
 
 - 5 列：加權指數＋4 檔自選股（2330 台積電、2317 鴻海、0050 元大台灣50、006208 富邦台50）——**v1 程式內固定**，改清單需重刷（watchlist 編輯列為 v2 候選）。
 - 每列三段：名稱（加權指數 28px，個股 20px）、現價（40px）、漲跌行（22px：▲/▼＋漲跌價＋%）。
+- **未成交列（z="-"，修訂七版）**：現價與漲跌行均顯示 `--`（22px），無 ▲/▼ 箭頭；
+  名稱與分隔線照常；不得渲染為價格 0 或漲跌 -100%。
 - 漲跌符號 ▲▼ 用 `drawTriangle` 手繪；上漲▲、下跌▼。
 - header 時間語意（**無歧義版**）：成功抓取同時保留 `quoteTime`（5 列中最新有效 `t`）
   與 `fetchedEpoch`（抓取當下本地時間）。
@@ -91,10 +94,11 @@
 
 ### 繪製層規則（旋轉）
 
-- **唯一旋轉層＝GxEPD2/Adafruit_GFX 的 `display.setRotation(1)`**（已查證：
+- **唯一旋轉層＝GxEPD2/Adafruit_GFX 的 `display.setRotation(3)`**（修訂七版
+  更正：三版原文寫 1，硬體檢查點實測 3 才是正立；1 為 180° 顛倒。
   `GxEPD2_GFX : public Adafruit_GFX`；U8g2_for_Adafruit_GFX adapter 之字形
   亦經 `gfx->drawFastHLine/VLine` 寫入 GFX，故隨 setRotation 一致旋轉）。
-- UI 初始化契約：`display.setRotation(1)` 設定**一次**（先於所有繪製）、
+- UI 初始化契約：`display.setRotation(3)` 設定**一次**（先於所有繪製）、
   `u8g2.begin(display)` 綁定同一 display，之後維持 `setFullWindow()`＋page loop。
   init 後 `display.width()==272`、`display.height()==792`。
 - **所有圖元**（文字＝u8g2 adapter；線/框/漲跌三角形＝`display.drawLine/drawRect/

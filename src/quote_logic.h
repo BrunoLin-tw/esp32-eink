@@ -136,7 +136,15 @@ inline int validateBatch(const RawBatch& in, MarketBatch* out) {
     seen[idx] = true;
     if (r.name[0] == '\0') return V_FORMAT;
     double z, y;
-    if (!parseNum(r.z, &z)) return V_NUMERIC;
+    if (!parseNum(r.z, &z)) {
+      // 盤中未成交：z 為 "-"（spec 修訂七版，2026-09-01 盤中實測）→ 記 0，
+      // UI 顯示 --；y 仍必須是有效數字
+      if (strcmp(r.z, "-") == 0) {
+        z = 0.0;
+      } else {
+        return V_NUMERIC;
+      }
+    }
     if (!parseNum(r.y, &y)) return V_NUMERIC;
     if (y == 0.0) return V_NUMERIC;
     if (!validTime(r.t)) return V_FORMAT;

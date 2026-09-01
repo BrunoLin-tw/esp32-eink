@@ -116,10 +116,32 @@ static void testValidateBatch() {
   strcpy(dup.rows[4].code, "2330");
   assert(qlogic::validateBatch(dup, &out) == qlogic::V_STRUCT);
 
-  // z 為 "-"
+  // z 為 "-"（盤中未成交，spec 修訂七版）：該列記 z=0，整批仍有效
   qlogic::RawBatch dash = raw;
   strcpy(dash.rows[2].z, "-");
-  assert(qlogic::validateBatch(dash, &out) == qlogic::V_NUMERIC);
+  assert(qlogic::validateBatch(dash, &out) == qlogic::V_OK);
+  assert(dash.rows[2].z[0] == '-');  // raw 不被改寫
+  qlogic::MarketBatch dashOut;
+  assert(qlogic::validateBatch(dash, &dashOut) == qlogic::V_OK);
+  assert(dashOut.rows[2].z == 0.0);
+  assert(dashOut.rows[2].y == 252.0000);  // y 欄不受影響
+
+  // y 為 "-" 仍拒絕（修訂七版只放寬 z）
+  qlogic::RawBatch ydash = raw;
+  strcpy(ydash.rows[2].y, "-");
+  assert(qlogic::validateBatch(ydash, &out) == qlogic::V_NUMERIC);
+
+  // 全部五列都未成交：整批仍有效（開盤瞬間的合法狀態）
+  qlogic::RawBatch allDash = raw;
+  for (int i = 0; i < 5; i++) strcpy(allDash.rows[i].z, "-");
+  qlogic::MarketBatch allDashOut;
+  assert(qlogic::validateBatch(allDash, &allDashOut) == qlogic::V_OK);
+  for (int i = 0; i < 5; i++) assert(allDashOut.rows[i].z == 0.0);
+
+  // z 為空字串仍拒絕（只有 "-" 有未成交語意）
+  qlogic::RawBatch emptyZ = raw;
+  strcpy(emptyZ.rows[2].z, "");
+  assert(qlogic::validateBatch(emptyZ, &out) == qlogic::V_NUMERIC);
 
   // y == 0
   qlogic::RawBatch zero = raw;
