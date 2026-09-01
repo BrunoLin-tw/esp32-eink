@@ -1594,6 +1594,13 @@ display.setRotation(1) 統一旋轉（僅此一處；圖元全經 GFX 邏輯
 
 ### Task 7: `src/main.cpp` 完整狀態機
 
+> **修訂紀錄**（硬體檢查點後，以 commit 為準，下方程式碼塊為原始草案）：
+> - `fdb1add`：stuck 改 goToDeepSleep 內統一覆寫 5 分 timer-only（R4）＋
+>   開機 local 時間 log＋switch default＋刪 SLEEP_US_RETRY
+> - `a9dbf6c`：盤中未成交 z="-" 記 0、UI 顯示 --（spec 修訂七版）
+> - 收盤定格緩衝：13:30-13:34 不抓取不定格、13:35 起定格，MENU 同規則
+>   （`closeFinalReady`/`closeFinalAt`，spec 修訂八版）
+
 **Files:**
 - Modify: `src/main.cpp`（整檔替換）
 

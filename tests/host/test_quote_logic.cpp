@@ -248,6 +248,15 @@ static void testSchedule() {
   // 24h cap
   assert(qlogic::capSleep(fri00, fri00 + 3 * 86400 + 9 * 3600) == 86400);
   assert(qlogic::capSleep(fri00, fri00 + 100) == 100);
+
+  // 收盤定格緩衝（spec 修訂八版）：13:35 起才允許定格
+  assert(!qlogic::closeFinalReady(fri00 + 13 * 3600 + 30 * 60));       // 13:30:00
+  assert(!qlogic::closeFinalReady(fri00 + 13 * 3600 + 34 * 60 + 59));  // 13:34:59
+  assert(qlogic::closeFinalReady(fri00 + 13 * 3600 + 35 * 60));        // 13:35:00
+  assert(qlogic::closeFinalReady(fri00 + 23 * 3600 + 59 * 60 + 59));   // 23:59:59
+  // closeFinalAt：13:30:20 → 當日 13:35:00（前置條件 13:30 ≤ now < 13:35）
+  uint32_t cf = fri00 + 13 * 3600 + 30 * 60 + 20;
+  assert(qlogic::closeFinalAt(cf) == fri00 + 13 * 3600 + 35 * 60);
   printf("schedule ok\n");
 }
 

@@ -251,8 +251,14 @@ void setup() {
         return;
       }
       if (st == qlogic::MarketState::PostClose && fr.isToday) {
-        // 順帶完成收盤定格，避免次輪重抓
-        finalizeClose(fr.mb, today, (uint32_t)time(nullptr));
+        if (qlogic::closeFinalReady((uint32_t)time(nullptr))) {
+          // 順帶完成收盤定格，避免次輪重抓（spec 修訂八版：僅 13:35 後定格）
+          finalizeClose(fr.mb, today, (uint32_t)time(nullptr));
+        } else {
+          // 13:30-13:34 手動更新：只渲染，睡至 13:35 讓一般路徑定格
+          goToDeepSleep(qlogic::closeFinalAt((uint32_t)time(nullptr)), !stuckGuard);
+          return;
+        }
       }
       goToDeepSleep(longSleepTarget(st, (uint32_t)time(nullptr)), !stuckGuard);
       return;
@@ -318,6 +324,12 @@ void setup() {
       if (have && strcmp(cache.lastCloseDate, today) == 0) {
         // 已定格
         goToDeepSleep(qlogic::nextWeekdayAt9(now), !stuckGuard);
+        return;
+      }
+      if (!qlogic::closeFinalReady(now)) {
+        // 13:30-13:34（spec 修訂八版）：收盤資料同步緩衝，不抓取、不定格；
+        // 畫面維持盤中最後一輪（e-ink 持續顯示），睡至 13:35 定格
+        goToDeepSleep(qlogic::closeFinalAt(now), !stuckGuard);
         return;
       }
       FetchResult fr = fetchUpdate(now, today);

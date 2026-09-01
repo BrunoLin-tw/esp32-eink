@@ -312,6 +312,16 @@ inline uint32_t nextWeekdayAt9(uint32_t utcNow) {
   return nextDayAt9(utcNow);  // 不可達
 }
 
+// 收盤定格緩衝（spec 修訂八版）：13:30 收盤後 MIS 完成撮合與資料同步需數
+// 分鐘，13:35 起才允許抓取並寫入定格旗標，避免凍結缺最後一筆的收盤資料
+inline bool closeFinalReady(uint32_t utcNow) {
+  Civil c = civilFromEpoch(utcNow, TZ_TW);
+  return (c.hh * 60 + c.mm2) >= 13 * 60 + 35;
+}
+
+// 僅限 PostClose 且 !closeFinalReady（13:30 ≤ now < 13:35）使用，保證目標在未來
+inline uint32_t closeFinalAt(uint32_t utcNow) { return atLocalTime(utcNow, 0, 13, 35); }
+
 // 5 分邊界對齊＋最小安全等待 30s（spec R1）
 inline uint32_t nextTradingBoundary(uint32_t utcNow) {
   uint32_t aligned = utcNow - (utcNow % 300) + 300;
