@@ -1,5 +1,4 @@
 #include <Arduino.h>
-#include <Preferences.h>
 #include <esp_sleep.h>
 #include <time.h>
 #include "driver/rtc_io.h"

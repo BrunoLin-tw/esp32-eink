@@ -124,9 +124,10 @@ make -C /tmp/opencode/u8g2/tools/font/bdfconv
 
 Upload speed 預設 `460800`；若燒錄不穩再降 `115200`。無法自動進入下載模式時：按住 `BOOT` → 點按 `RESET` → 放開 `RESET` → 放開 `BOOT` → 重試上傳。
 
-## RAW 轉檔工具用法（`tools/raw_convert.py`，SD 相框應用）
+## RAW 轉檔工具用法（SD 相框應用）
 
-SD 相框（`photo-frame-v1`）用的轉檔工具；報價看板不使用。將 JPG/PNG 轉成
+SD 相框（`photo-frame-v1` 標籤）用的轉檔工具；報價看板不使用，**檔案不在
+現行工作樹**。使用前先切換：`git checkout photo-frame-v1`。將 JPG/PNG 轉成
 相框可顯示的 `.raw`（792x272、1bpp 黑白、Floyd–Steinberg 抖動）。
 
 ### 基本轉檔

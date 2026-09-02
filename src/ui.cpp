@@ -33,7 +33,7 @@ void uiInit() {
   SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS);
   uint32_t t0 = millis();
   display.init(115200, true, 2, false);
-  display.setRotation(3);   // 唯一旋轉層（spec 修訂三版）；init 一次
+  display.setRotation(3);   // 唯一旋轉層（硬體驗證 3 正立；spec 修訂七版）；init 一次
   u8g2.begin(display);
   initialized = true;
   LOGF("display init %lu ms rot=%d w=%d h=%d\n", (unsigned long)(millis() - t0),
@@ -66,7 +66,7 @@ static void drawFlatDash(int x, int yBase) {
 
 void uiShowQuotes(const QuoteView& v) {
   if (!initialized) return;
-  // 全部圖元經已 setRotation(1) 之 display（邏輯 272x792）——spec 修訂三版
+  // 全部圖元經已 setRotation(3) 之 display（邏輯 272x792）——spec 修訂七版
   display.setFullWindow();
   display.firstPage();
   do {
@@ -87,17 +87,27 @@ void uiShowQuotes(const QuoteView& v) {
       u8g2.setCursor(16, y0 + (i == 0 ? 26 : 20));
       if (v.names[i]) u8g2.print(v.names[i]);
       char buf[24];
-      qlogic::formatPrice(v.z[i], buf, sizeof buf);
-      setFontT(u8g2_font_logisoso38_tr);
-      u8g2.setCursor(16, y0 + 72);
-      u8g2.print(buf);
-      setFontT(u8g2_font_logisoso22_tr);
-      if (v.chg[i] > 0.0001)      drawArrowUp(16, y0 + 112);
-      else if (v.chg[i] < -0.0001) drawArrowDown(16, y0 + 112);
-      else                         drawFlatDash(16, y0 + 112);
-      snprintf(buf, sizeof buf, "%+.2f  %+.2f%%", v.chg[i], v.pct[i]);
-      u8g2.setCursor(42, y0 + 112);
-      u8g2.print(buf);
+      if (v.z[i] == 0.0) {
+        // 今日未成交（z="-"，spec 修訂七版）：現價與漲跌行均 "--"（22px）、無箭頭；
+        // 不得渲染為價格 0 或漲跌 -100%（y 必不為 0、真實價格必不為 0）
+        setFontT(u8g2_font_logisoso22_tr);
+        u8g2.setCursor(16, y0 + 72);
+        u8g2.print("--");
+        u8g2.setCursor(42, y0 + 112);
+        u8g2.print("--");
+      } else {
+        qlogic::formatPrice(v.z[i], buf, sizeof buf);
+        setFontT(u8g2_font_logisoso38_tr);
+        u8g2.setCursor(16, y0 + 72);
+        u8g2.print(buf);
+        setFontT(u8g2_font_logisoso22_tr);
+        if (v.chg[i] > 0.0001)      drawArrowUp(16, y0 + 112);
+        else if (v.chg[i] < -0.0001) drawArrowDown(16, y0 + 112);
+        else                         drawFlatDash(16, y0 + 112);
+        snprintf(buf, sizeof buf, "%+.2f  %+.2f%%", v.chg[i], v.pct[i]);
+        u8g2.setCursor(42, y0 + 112);
+        u8g2.print(buf);
+      }
       if (i < QUOTE_ROWS - 1) display.drawLine(16, y0 + 130, 256, y0 + 130, GxEPD_BLACK);
     }
     if (v.status) {

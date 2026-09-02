@@ -4,7 +4,8 @@
 // 報價看板列數（單一資料源；watchlist.h 以 static_assert 對齊 WATCH_N）
 static constexpr int QUOTE_ROWS = 5;
 
-// 報價看板 UI（直式 272x792，display.setRotation(1) 統一旋轉）
+// 報價看板 UI（直式 272x792，display.setRotation(3) 統一旋轉；硬體驗證
+// 3 才正立，spec 修訂七版更正）
 struct QuoteView {
   const char* names[QUOTE_ROWS];
   double z[QUOTE_ROWS];

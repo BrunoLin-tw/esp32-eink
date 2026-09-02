@@ -106,7 +106,8 @@
 - **禁止**手寫 272x792→792x272 座標映射；**禁止**同一幀內變更 rotation；
   禁止使用 adapter 不存在的 `setDisplayRotation` 契約（那是 u8g2 core
   自有 backend 的 API，非本 adapter 之契約）。
-- 方向確認（`setRotation(1)` vs `(3)`）於實機以「header 位於頂部、文字正立」擇定。
+- 方向確認（`setRotation(1)` vs `(3)`）於實機以「header 位於頂部、文字正立」
+  擇定——**結果為 3**（修訂七版更正；1 為 180° 顛倒）。
 
 ## 字型策略（本次新增工具鏈，已獲同意）
 
@@ -133,7 +134,7 @@ U8g2 內建中文字型僅 16px；20px／28px 名稱需自製**子集**字型：
 | --- | --- |
 | `src/main.cpp` | 狀態機：喚醒分流、市場狀態判定、睡眠排程、MENU 立即更新 |
 | `src/quote_store.h/.cpp` | Wi-Fi 連線、HTTPS 抓取（含 TLS 契約）、JSON 解析與欄位驗證、漲跌計算、NVS blob |
-| `src/ui.h/.cpp` | 直式版面渲染（`display.setRotation(1)` 統一旋轉）、header、狀態字 |
+| `src/ui.h/.cpp` | 直式版面渲染（`display.setRotation(3)` 統一旋轉，修訂七版更正）、header、狀態字 |
 | `src/watchlist.h` | 標的清單常數（代碼＋`ex_ch`＋中文名） |
 | `src/secrets.h.example` | Wi-Fi 憑證範本（`secrets.h` 本機檔、gitignored） |
 | `src/twse_root_ca.h` | TLS 主要信任錨（釘選 TWCA Global Root CA PEM，版本控管） |
@@ -224,7 +225,7 @@ host 端（不需硬體）：
 2. 漲跌計算（正/負/零、整數與小數）單元測試。
 3. JSON 解析＋欄位有效性（R2）：缺列/重複代碼、`z`/`y` 為 `-` 或空、`y==0`、
    `d`/`t` 格式錯誤、**五列 `d` 不一致** → 整批失敗。
-4. **旋轉 golden test**：以 `display.setRotation(1)` 為唯一旋轉層的資料路徑——
+4. **旋轉 golden test**：以 `display.setRotation(3)` 為唯一旋轉層的資料路徑——
    邏輯四角落座標映射、▲▼三角形方向、文字 baseline（adapter 經 GFX 繪製）、
    框線完整性、272x792 邊界裁切。
 5. 睡眠排程單元測試：5 分邊界對齊（R1，含最小 30 s、越界跳下一邊界）、

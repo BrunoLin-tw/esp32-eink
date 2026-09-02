@@ -8,6 +8,10 @@
 secrets.h
 src/secrets.h
 credentials.h
+
+# 序列埠 log（pio device monitor -f log2file 輸出）
+logs/
+platformio-device-monitor-*.log
 *.key
 *.pem
 .env
