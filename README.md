@@ -15,12 +15,15 @@
 | --- | --- |
 | Bring-up（編譯/上傳/serial/全刷/局部刷新/sleep-wake＋按鍵、microSD、Wi-Fi 掃描） | 完成，標籤 `bringup-v1` |
 | 天氣看板 v1（四地點 Open-Meteo、30 分睡眠週期、撥桿切換地點） | 完成，標籤 `weather-v1` |
-| SD 相框 v1（`/raw_photos/*.raw` 瀏覽、手動翻頁＋自動輪播、三鍵喚醒） | **現行韌體** |
-| 實機量測紀錄 | 見 [device-research.md](docs/device-research.md) 的量測章節 |
+| SD 相框 v1（`/raw_photos/*.raw` 瀏覽、手動翻頁＋自動輪播、三鍵喚醒） | 完成，標籤 `photo-frame-v1` |
+| 報價看板 v1（台股盤中 5 分更新、收盤定格、直式安裝） | **現行韌體** |
 
-目前韌體即 **SD 相框**。先前應用保留於 git 標籤：bring-up＝`bringup-v1`、
-天氣看板＝`weather-v1`（`git checkout weather-v1` 即可回復）；相框分支
-開發紀錄見 `feature/photo-frame` 的 commit 歷史。
+目前韌體即**報價看板**：直立安裝，顯示加權指數＋台積電／鴻海／元大台灣50／
+富邦台50，盤中（09:00–13:30）每 5 分鐘邊界更新，13:35 收盤定格後長睡至次
+交易日 09:00。先前應用保留於 git 標籤：bring-up＝`bringup-v1`、天氣看板＝
+`weather-v1`、SD 相框＝`photo-frame-v1`（`git checkout photo-frame-v1` 即可
+回復相框）；開發紀錄見各 feature 分支 commit 歷史與
+`docs/superpowers/specs/2026-08-29-quote-board-design.md`。
 
 ## 工具鏈與依賴（已固定版本）
 
@@ -29,6 +32,7 @@ PlatformIO + Arduino framework。`platformio.ini` 已 pin：
 - `espressif32@7.0.1`（Arduino core ESP32 2.0.17）
 - `zinggjm/GxEPD2@1.6.9`（面板 class `GxEPD2_579_GDEY0579T93`）
 - `olikraus/U8g2_for_Adafruit_GFX@1.8.0`
+- `bblanchon/ArduinoJson@7.4.3`
 
 Board 設定：`esp32-s3-devkitc-1` 相容定義、8 MB Flash、`qio_opi` PSRAM、涵蓋完整 8 MiB 的 partition layout。
 
@@ -50,7 +54,7 @@ python3 -m venv /tmp/opencode/pio-venv
 ```
 
 - `pio` 二進位路徑：`/tmp/opencode/pio-venv/bin/pio`（本專案文件與慣例均以此完整路徑呼叫）
-- `pillow` 供轉檔工具 `tools/raw_convert.py` 使用
+- `pillow` 供字型重產工具 `tools/gen_fonts.py` 使用（僅重產字型時需要）
 
 ### 首次編譯
 
@@ -60,34 +64,70 @@ python3 -m venv /tmp/opencode/pio-venv
 
 `/tmp/opencode/pio-venv` 若被系統清理，重跑上述兩行指令即可；`~/.platformio/` 的工具鏈不受影響，無須重新下載。
 
-## 快速開始
+### Host 測試（純邏輯單元測試）
 
-1. 安裝 PlatformIO（VS Code extension 或 PlatformIO Core）。
-2. 準備 SD 卡：**FAT32** 格式化（SD library 不支援 exFAT），建立
-   `/raw_photos/` 資料夾，放入 `.raw` 檔。轉檔（JPG/PNG → RAW）：
+報價驗證／排程／NVS blob 邏輯抽成 `src/quote_logic.h`，於 host 以 g++ 測試：
 
-   ```sh
-   /tmp/opencode/pio-venv/bin/python tools/raw_convert.py 照片.jpg --out RAW輸出目錄
-   # 支援 --mode contain（預設，置中留白）／cover（裁切填滿）、
-   # --force（覆寫）、批次多檔；把輸出的 .raw 複製到卡上 /raw_photos/
+```sh
+g++ -std=c++17 -I src -I .pio/libdeps/esp32eink/ArduinoJson/src \
+    tests/host/test_quote_logic.cpp -o /tmp/opencode/test_quote_logic
+/tmp/opencode/test_quote_logic        # 預期 ALL PASS
+g++ -std=c++17 -I src -I .pio/libdeps/esp32eink/GxEPD2/src \
+    tests/host/test_rotation.cpp -o /tmp/opencode/test_rotation
+/tmp/opencode/test_rotation
+```
+
+### 字型重產（僅 manifest 變更時）
+
+`src/fonts_quote.c` 已提交 repo，日常開發不需要重產。新增/修改中文字元時：
+
+```sh
+git clone --depth 1 --branch 2.37.1 https://github.com/olikraus/u8g2 /tmp/opencode/u8g2
+make -C /tmp/opencode/u8g2/tools/font/bdfconv
+/tmp/opencode/pio-venv/bin/python tools/gen_fonts.py   # 需 Noto Sans CJK Bold（OFL）
+```
+
+產出 byte-identical 才算通過（可重現性契約，見 spec R5）。
+
+## 快速開始（報價看板）
+
+1. 建立 `src/secrets.h`（已 gitignore，不得 commit；範本見 `src/secrets.h.example`）：
+
+   ```c
+   #define WIFI_SSID "你的SSID"
+   #define WIFI_PASS "你的密碼"
    ```
 
-3. 使用可傳輸資料的 USB-C 線連接裝置（經板上 CH340C）。Linux 需將使用者加入 `dialout` 群組並重新登入。
-4. 編譯、上傳、監看：
+2. 使用可傳輸資料的 USB-C 線連接裝置（經板上 CH340C）。Linux 需將使用者加入 `dialout` 群組並重新登入。
+3. 編譯、上傳、監看：
 
    ```sh
-   pio run
-   pio run -t upload
-   pio device monitor -b 115200
+   /tmp/opencode/pio-venv/bin/pio run
+   /tmp/opencode/pio-venv/bin/pio run -t upload
+   /tmp/opencode/pio-venv/bin/pio device monitor -b 115200
    ```
 
-操作：撥桿**上／下**翻頁、**下壓**進選單設定輪播間隔（OFF/1/5/15/30 分，存 NVS）。
+4. 直立安裝（面板實體轉 90°）。運作週期：
+
+   | 時段（週一~五） | 行為 |
+   | --- | --- |
+   | 00:00–08:59 | 長睡至 09:00 |
+   | 09:00–13:30 | 每 5 分鐘邊界抓取＋渲染；未成交列顯示 `--` |
+   | 13:30–13:34 | 收盤緩衝（MIS 撮合同步），畫面不變 |
+   | 13:35 | 收盤定格（寫入 NVS）→ 長睡至次交易日 09:00 |
+   | 週末／休市日 | 長睡至次交易日 09:00 |
+
+   - **MENU 鍵**（GPIO2）：任何時刻按一下＝立即更新。抓取失敗顯示快取＋「更新失敗」，5 分後自動重試。
+   - Wi-Fi／NTP 失敗：顯示快取或錯誤訊息，5 分短睡重試；NTP 未同步時不判定市場狀態、不誤判假日。
+   - 按住 MENU 開機（卡鍵）：該輪 5 分鐘 timer-only（防喚醒迴圈），放開後恢復正常。
+   - 抓取走 HTTPS 並釘選 `TWCA Global Root CA`（`src/twse_root_ca.h`，2030-12-31 到期前需輪換）；資料源 `mis.twse.com.tw`。
 
 Upload speed 預設 `460800`；若燒錄不穩再降 `115200`。無法自動進入下載模式時：按住 `BOOT` → 點按 `RESET` → 放開 `RESET` → 放開 `BOOT` → 重試上傳。
 
-## RAW 轉檔工具用法（`tools/raw_convert.py`）
+## RAW 轉檔工具用法（`tools/raw_convert.py`，SD 相框應用）
 
-將 JPG/PNG 轉成裝置可顯示的 `.raw`（792x272、1bpp 黑白、Floyd–Steinberg 抖動）。
+SD 相框（`photo-frame-v1`）用的轉檔工具；報價看板不使用。將 JPG/PNG 轉成
+相框可顯示的 `.raw`（792x272、1bpp 黑白、Floyd–Steinberg 抖動）。
 
 ### 基本轉檔
 
@@ -138,12 +178,18 @@ ls -l /tmp/opencode/photos/*.raw    # 確認 26940 bytes
 esp32-eink/
 ├── platformio.ini          # 工程設定（版本已固定）
 ├── src/
-│   ├── main.cpp            # 狀態機、三鍵喚醒分流、輪播 timer、NVS
-│   ├── photo_store.h/.cpp  # SD 掛載/GPIO42、掃描排序、驗頭讀檔、cleanup
-│   ├── ui.h/.cpp           # 全幅顯示、選單/提示畫面（U8g2 字型）、深睡 hold
+│   ├── main.cpp            # 狀態機（四市場狀態＋MENU 例外＋睡眠雙源）
+│   ├── quote_logic.h       # 純邏輯：驗證/JSON/排程/blob（host 測試）
+│   ├── quote_store.h/.cpp  # Wi-Fi/NTP/HTTPS（TLS 釘選）/JSON/NVS
+│   ├── ui.h/.cpp           # 直式 A3 版面、狀態列、深睡 hold
+│   ├── watchlist.h         # 自選清單（t00/2330/2317/0050/006208）＋ex_ch 組裝
+│   ├── fonts_quote.c/.h    # U8g2 中文子集字型（tools/gen_fonts.py 產出）
+│   ├── twse_root_ca.h      # TWCA Global Root CA（釘選；2030-12-31 到期）
 │   ├── log.h               # 時間戳 LOGF
-│   └── secrets.h           # 本機檔（gitignored，本應用不使用）
-├── tools/raw_convert.py    # JPG/PNG → EPFR .raw 轉檔（Pillow）
+│   ├── secrets.h           # 本機檔（gitignored）；secrets.h.example 為範本
+│   └── secrets.h.example
+├── tests/host/             # quote_logic/rotation 純邏輯測試（g++）
+├── tools/gen_fonts.py      # 中文子集字型重產（PIL→BDF→bdfconv）
 ├── docs/                   # 研究、規格、計畫、應用候選
 ├── README.md
 └── AGENTS.md               # 代理人作業規則
@@ -153,10 +199,14 @@ esp32-eink/
 
 - 此型號沒有觸控與背光，不能套用 touch controller、觸控校正或 backlight GPIO 的設定。
 - 顯示器由雙 `SSD1683` 驅動；可見畫面是 792x272，但 ELECROW 官方 driver 使用 800x272 內部 framebuffer，兩者不能直接互換。
-- GxEPD2 的 partial 視窗狀態會殘留：`setPartialWindow()` 之後渲染整頁前必須先 `setFullWindow()`；且此面板 partial 視窗有座標對齊問題，**選單游標更新採整頁重繪**。
-- RAW 契約：12-byte 檔頭（`EPFR`＋version/flags/w/h/reserved）＋26,928 B payload，bit1=黑 bit0=白、每列 99 B。
+- GxEPD2 的 partial 視窗狀態會殘留：`setPartialWindow()` 之後渲染整頁前必須先 `setFullWindow()`；且此面板 partial 視窗有座標對齊問題，**報價看板每次更新都整頁重繪**。
+- **直式版面契約**：`display.setRotation(3)`（唯一旋轉層，硬體驗證過 3 才正立；1 是 180° 顛倒）＋邏輯座標 272x792＋`setFullWindow()` page loop。
+- **U8g2 換字型必須走 `setFontT()`**（`setFont`＋`setFontMode(1)`＋白底）：直接 `u8g2_SetFont()` 會重設 solid mode，出現黑色 glyph 方塊（實機驗證）。
+- 報價資料驗證採 all-or-nothing；盤中未成交 `z="-"` 該列記 0 並顯示 `--`（spec 修訂七版），y 無效仍整批拒絕。
+- NVS 快取 write-on-change：逐欄位 `recordDiffers()`，禁止 `memcmp`（struct padding）；`quoteTime`/`savedEpoch` 單獨變更不寫。
 - USB-C 經 CH340C 連到 UART，不是 ESP32-S3 原生 USB。
 - 電池只能使用具保護電路的 1S 3.7 V LiPo／Li-ion；接線前要量測並確認極性，不得假設主板有完整 cell protection 或可讀取電池電壓的 ADC。目前仍以 USB 供電，電池尚未接入。
+- 已知韌體行為（實機觀測，見 device-research）：NTP 首包偶有 stale 回應使時鐘偏差數分鐘、deep sleep timer 整夜漂移可達數分鐘（RC slow clock）；兩者皆因「睡眠目標為絕對 epoch」而自我修復，最壞多跑一輪循環。
 
 ## 文件
 
@@ -168,6 +218,7 @@ esp32-eink/
   - [Bring-up 驗證設計](docs/superpowers/specs/2026-08-24-bringup-verification-design.md)／[計畫](docs/superpowers/plans/2026-08-24-bringup-verification.md)
   - [天氣看板設計](docs/superpowers/specs/2026-08-25-weather-station-design.md)／[計畫](docs/superpowers/plans/2026-08-25-weather-station.md)
   - [SD 相框設計](docs/superpowers/specs/2026-08-26-photo-frame-design.md)／[計畫](docs/superpowers/plans/2026-08-26-photo-frame.md)
+  - [報價看板設計](docs/superpowers/specs/2026-08-29-quote-board-design.md)／[計畫](docs/superpowers/plans/2026-08-29-quote-board.md)
 
 ## 資料來源
 
