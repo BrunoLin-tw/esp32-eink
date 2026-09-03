@@ -16,14 +16,16 @@
 | Bring-up（編譯/上傳/serial/全刷/局部刷新/sleep-wake＋按鍵、microSD、Wi-Fi 掃描） | 完成，標籤 `bringup-v1` |
 | 天氣看板 v1（四地點 Open-Meteo、30 分睡眠週期、撥桿切換地點） | 完成，標籤 `weather-v1` |
 | SD 相框 v1（`/raw_photos/*.raw` 瀏覽、手動翻頁＋自動輪播、三鍵喚醒） | 完成，標籤 `photo-frame-v1` |
-| 報價看板 v1（台股盤中 5 分更新、收盤定格、直式安裝） | **現行韌體** |
+| 報價看板 v2（雙頁八檔）— 開發中，分支 `feature/quote-board-multipage` | **候選韌體** |
 
-目前韌體即**報價看板**：直立安裝，顯示加權指數＋台積電／鴻海／元大台灣50／
-富邦台50，盤中（09:00–13:30）每 5 分鐘邊界更新，13:35 收盤定格後長睡至次
+目前韌體即**報價看板 v2 候選**：直立安裝，第 1 頁顯示加權指數＋台積電／鴻海／
+元大台灣50／富邦台50，第 2 頁顯示加權指數＋中興電／中華電／富邦金／中鋼，
+盤中（09:00–13:30）每 5 分鐘邊界更新並保留目前頁，13:35 收盤定格後長睡至次
 交易日 09:00。先前應用保留於 git 標籤：bring-up＝`bringup-v1`、天氣看板＝
 `weather-v1`、SD 相框＝`photo-frame-v1`（`git checkout photo-frame-v1` 即可
-回復相框）；開發紀錄見各 feature 分支 commit 歷史與
-`docs/superpowers/specs/2026-08-29-quote-board-design.md`。
+回復相框）；開發紀錄見各 feature 分支 commit 歷史、
+`docs/superpowers/specs/2026-08-29-quote-board-design.md` 與
+`docs/superpowers/specs/2026-09-03-quote-board-multipage-design.md`。
 
 ## 工具鏈與依賴（已固定版本）
 
@@ -117,10 +119,12 @@ make -C /tmp/opencode/u8g2/tools/font/bdfconv
    | 13:35 | 收盤定格（寫入 NVS）→ 長睡至次交易日 09:00 |
    | 週末／休市日 | 長睡至次交易日 09:00 |
 
-   - **MENU 鍵**（GPIO2）：任何時刻按一下＝立即更新。抓取失敗顯示快取＋「更新失敗」，5 分後自動重試。
-   - Wi-Fi／NTP 失敗：顯示快取或錯誤訊息，5 分短睡重試；NTP 未同步時不判定市場狀態、不誤判假日。
-   - 按住 MENU 開機（卡鍵）：該輪 5 分鐘 timer-only（防喚醒迴圈），放開後恢復正常。
-   - 抓取走 HTTPS 並釘選 `TWCA Global Root CA`（`src/twse_root_ca.h`，2030-12-31 到期前需輪換）；資料源 `mis.twse.com.tw`。
+    - **MENU 鍵**（GPIO2）：任何時刻按一下＝立即更新目前頁（一次抓取全部 9 檔）。抓取失敗顯示快取＋「更新失敗」，5 分後自動重試。
+    - **UP（GPIO6）／DOWN（GPIO4）**：快取翻頁（不連網、不做 NTP、不寫 NVS），約一次 full refresh（約 4.4 秒）；翻頁後睡回原排程目標並保留目前頁。標頭顯示 `1/2` 或 `2/2`，快取時間沿用 `savedEpoch`。
+    - **EXIT（GPIO1）／PRESS（GPIO5）**：本版未使用，不加入喚醒 mask。
+    - Wi-Fi／NTP 失敗：顯示快取或錯誤訊息，5 分短睡重試；NTP 未同步時不判定市場狀態、不誤判假日。
+    - 按住 MENU／UP／DOWN 任一喚醒鍵開機（卡鍵）：該輪 5 分鐘 timer-only（防喚醒迴圈），放開後恢復正常；按住 EXIT 或 PRESS 不觸發卡鍵防護。
+    - 抓取走 HTTPS 並釘選 `TWCA Global Root CA`（`src/twse_root_ca.h`，2030-12-31 到期前需輪換）；資料源 `mis.twse.com.tw`，一次請求帶全部 9 個 `ex_ch`。
 
 Upload speed 預設 `460800`；若燒錄不穩再降 `115200`。無法自動進入下載模式時：按住 `BOOT` → 點按 `RESET` → 放開 `RESET` → 放開 `BOOT` → 重試上傳。
 
@@ -183,7 +187,7 @@ esp32-eink/
 │   ├── quote_logic.h       # 純邏輯：驗證/JSON/排程/blob（host 測試）
 │   ├── quote_store.h/.cpp  # Wi-Fi/NTP/HTTPS（TLS 釘選）/JSON/NVS
 │   ├── ui.h/.cpp           # 直式 A3 版面、狀態列、深睡 hold
-│   ├── watchlist.h         # 自選清單（t00/2330/2317/0050/006208）＋ex_ch 組裝
+│   ├── watchlist.h         # 固定九檔清單（t00＋八檔個股）＋ex_ch 組裝（修改後須同步字型 manifest 並重編譯燒錄）
 │   ├── fonts_quote.c/.h    # U8g2 中文子集字型（tools/gen_fonts.py 產出）
 │   ├── twse_root_ca.h      # TWCA Global Root CA（釘選；2030-12-31 到期）
 │   ├── log.h               # 時間戳 LOGF
@@ -203,9 +207,10 @@ esp32-eink/
 - GxEPD2 的 partial 視窗狀態會殘留：`setPartialWindow()` 之後渲染整頁前必須先 `setFullWindow()`；且此面板 partial 視窗有座標對齊問題，**報價看板每次更新都整頁重繪**。
 - **直式版面契約**：`display.setRotation(3)`（唯一旋轉層，硬體驗證過 3 才正立；1 是 180° 顛倒）＋邏輯座標 272x792＋`setFullWindow()` page loop。
 - **U8g2 換字型必須走 `setFontT()`**（`setFont`＋`setFontMode(1)`＋白底）：直接 `u8g2_SetFont()` 會重設 solid mode，出現黑色 glyph 方塊（實機驗證）。
-- 報價資料驗證採 all-or-nothing；盤中未成交 `z="-"` 該列記 0 並顯示 `--`（spec 修訂七版），y 無效仍整批拒絕。
-- NVS 快取 write-on-change：逐欄位 `recordDiffers()`，禁止 `memcmp`（struct padding）；`quoteTime`/`savedEpoch` 單獨變更不寫。
+- 報價資料驗證：指數列（`t00`）缺列／重複／欄位無效則整批拒絕；個股列缺列／重複／欄位無效或日期與指數不同僅該列 `valid=false` 並顯示 `--`，所在頁另顯示「部分失敗」（另一頁不顯示；優先序：時間未同步＞更新失敗＞部分失敗）。盤中未成交 `z="-"` 記 0 並顯示 `--`，不觸發「部分失敗」。
+- NVS 快取 v2（`BLOB_VERSION=2`）：舊 v1 blob 不遷移，升級後首次啟動視為無快取並重新連網抓取。write-on-change：逐欄位 `recordDiffers()`，禁止 `memcmp`（struct padding）；`quoteTime`/`savedEpoch` 單獨變更不寫。
 - USB-C 經 CH340C 連到 UART，不是 ESP32-S3 原生 USB。
+- 字型 manifest（`tools/gen_fonts.py`）：已含第二頁名稱（中興電／中華電／富邦金／中鋼新增字為中、興、華、金、鋼）與「部分失敗」（部、分）及標頭 `/`；修改清單名稱須同步更新 manifest 並重產 `src/fonts_quote.c`（byte-identical 才算通過）。
 - 電池只能使用具保護電路的 1S 3.7 V LiPo／Li-ion；接線前要量測並確認極性，不得假設主板有完整 cell protection 或可讀取電池電壓的 ADC。目前仍以 USB 供電，電池尚未接入。
 - 已知韌體行為（實機觀測，見 device-research）：NTP 首包偶有 stale 回應使時鐘偏差數分鐘、deep sleep timer 整夜漂移可達數分鐘（RC slow clock）；兩者皆因「睡眠目標為絕對 epoch」而自我修復，最壞多跑一輪循環。
 
@@ -219,7 +224,8 @@ esp32-eink/
   - [Bring-up 驗證設計](docs/superpowers/specs/2026-08-24-bringup-verification-design.md)／[計畫](docs/superpowers/plans/2026-08-24-bringup-verification.md)
   - [天氣看板設計](docs/superpowers/specs/2026-08-25-weather-station-design.md)／[計畫](docs/superpowers/plans/2026-08-25-weather-station.md)
   - [SD 相框設計](docs/superpowers/specs/2026-08-26-photo-frame-design.md)／[計畫](docs/superpowers/plans/2026-08-26-photo-frame.md)
-  - [報價看板設計](docs/superpowers/specs/2026-08-29-quote-board-design.md)／[計畫](docs/superpowers/plans/2026-08-29-quote-board.md)
+   - [報價看板設計](docs/superpowers/specs/2026-08-29-quote-board-design.md)／[計畫](docs/superpowers/plans/2026-08-29-quote-board.md)
+   - [報價看板雙頁八檔設計](docs/superpowers/specs/2026-09-03-quote-board-multipage-design.md)／[計畫](docs/superpowers/plans/2026-09-03-quote-board-multipage.md)
 
 ## 資料來源
 
