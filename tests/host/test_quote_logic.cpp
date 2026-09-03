@@ -588,6 +588,52 @@ static void testNineRowJsonCollection() {
   printf("nine-row json ok\n");
 }
 
+static void testViewStatus() {
+  using qlogic::ViewStatus;
+  assert(qlogic::resolvedStatus(ViewStatus::None, false) == ViewStatus::None);
+  assert(qlogic::resolvedStatus(ViewStatus::None, true) == ViewStatus::PartialFailure);
+  assert(qlogic::resolvedStatus(ViewStatus::PartialFailure, false) == ViewStatus::None);
+  assert(qlogic::resolvedStatus(ViewStatus::UpdateFailure, false) == ViewStatus::UpdateFailure);
+  assert(qlogic::resolvedStatus(ViewStatus::UpdateFailure, true) == ViewStatus::UpdateFailure);
+  assert(qlogic::resolvedStatus(ViewStatus::TimeUnsynced, false) == ViewStatus::TimeUnsynced);
+  assert(qlogic::resolvedStatus(ViewStatus::TimeUnsynced, true) == ViewStatus::TimeUnsynced);
+
+  auto raw = validRawBatch();
+  qlogic::MarketBatch mb;
+  assert(qlogic::validateBatch(raw, &mb) == qlogic::V_OK);
+  qlogic::QuoteRecord record = {};
+  record.version = qlogic::BLOB_VERSION;
+  for (int i = 0; i < QUOTE_TOTAL; ++i) record.rows[i] = mb.rows[i];
+  qlogic::invalidateRow(&record.rows[6], WATCHLIST[6].code);
+  auto pageHasInvalid = [&](uint8_t page) {
+    for (int row = 0; row < PAGE_ROWS; ++row) {
+      int idx = qlogic::quoteIndexForPageRow(page, row);
+      if (!record.rows[idx].valid) return true;
+    }
+    return false;
+  };
+  assert(!pageHasInvalid(0));
+  assert(pageHasInvalid(1));
+  printf("view status ok\n");
+}
+
+static void testHardening() {
+  const uint32_t now = 1000000;
+  assert(qlogic::changedPage(9, qlogic::WakeAction::NextPage) == 0);  // OOB page resets to 0
+  qlogic::QuoteRtcState keep{1, 1234};
+  qlogic::normalizeRtcState(&keep, true);
+  assert(keep.pageIndex == 1 && keep.targetEpoch == 1234);  // valid page preserved
+  qlogic::normalizeRtcState(nullptr, true);  // must not crash
+  qlogic::normalizeRtcState(nullptr, false);  // must not crash
+  assert(qlogic::resumeTarget(now, now + 7 * 86400) == now + 7 * 86400);  // exact +7d valid
+  assert(qlogic::chooseWakeAction(false, true, false) == qlogic::WakeAction::PrevPage);
+  assert(qlogic::chooseWakeAction(false, false, true) == qlogic::WakeAction::NextPage);
+  assert(qlogic::chooseWakeAction(false, false, false) == qlogic::WakeAction::None);
+  assert(qlogic::changedPage(1, qlogic::WakeAction::None) == 1);
+  assert(qlogic::changedPage(0, qlogic::WakeAction::Menu) == 0);
+  printf("hardening ok\n");
+}
+
 int main() {
   testWatchlistAndExCh();
   testParseNum();
@@ -604,6 +650,8 @@ int main() {
   testSchedule();
   testBlob();
   testPageRtc();
+  testViewStatus();
+  testHardening();
   printf("ALL PASS\n");
   return 0;
 }

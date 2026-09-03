@@ -457,6 +457,7 @@ inline int quoteIndexForPageRow(uint8_t pageIndex, int rowIndex) {
 }
 
 // PrevPage/NextPage 在 2 頁間迴繞（0↔1）；None/Menu 保持原頁
+// 越界 pageIndex 回傳 0（與 normalizeRtcState 歸零一致）
 inline uint8_t changedPage(uint8_t pageIndex, WakeAction action) {
   if (pageIndex >= PAGE_COUNT) return 0;
   if (action == WakeAction::PrevPage)
@@ -464,6 +465,16 @@ inline uint8_t changedPage(uint8_t pageIndex, WakeAction action) {
   if (action == WakeAction::NextPage)
     return static_cast<uint8_t>((pageIndex + 1) % PAGE_COUNT);
   return pageIndex;
+}
+
+enum class ViewStatus { None, PartialFailure, UpdateFailure, TimeUnsynced };
+
+inline ViewStatus resolvedStatus(ViewStatus requested, bool visibleInvalid) {
+  if (requested == ViewStatus::TimeUnsynced ||
+      requested == ViewStatus::UpdateFailure) {
+    return requested;
+  }
+  return visibleInvalid ? ViewStatus::PartialFailure : ViewStatus::None;
 }
 
 // menu 優先 Menu；up+down 同時 → None；單 up → PrevPage；單 down → NextPage

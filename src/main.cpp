@@ -26,29 +26,66 @@ static bool loadCache(qlogic::QuoteRecord* rec) {
 }
 
 // ---------- 視圖組裝 ----------
+static qlogic::ViewStatus toViewStatus(const char* status) {
+  if (status == nullptr) return qlogic::ViewStatus::None;
+  if (strcmp(status, "時間未同步") == 0) return qlogic::ViewStatus::TimeUnsynced;
+  if (strcmp(status, "更新失敗") == 0) return qlogic::ViewStatus::UpdateFailure;
+  return qlogic::ViewStatus::PartialFailure;
+}
+
+static const char* toStatusLiteral(qlogic::ViewStatus s) {
+  switch (s) {
+    case qlogic::ViewStatus::PartialFailure: return "部分失敗";
+    case qlogic::ViewStatus::UpdateFailure: return "更新失敗";
+    case qlogic::ViewStatus::TimeUnsynced: return "時間未同步";
+    default: return nullptr;
+  }
+}
+
 static void viewFromRecord(QuoteView* v, const qlogic::QuoteRecord& rec,
-                           const char* timeStr, const char* status) {
-  for (int i = 0; i < WATCH_N; i++) {
-    v->names[i] = WATCHLIST[i].name;
-    v->z[i] = rec.rows[i].z;
-    qlogic::QuoteCalc c = qlogic::calcQuote(rec.rows[i].z, rec.rows[i].y);
-    v->chg[i] = c.chg;
-    v->pct[i] = c.pct;
+                           const char* timeStr, const char* status, uint8_t pageIndex) {
+  bool visibleInvalid = false;
+  for (int row = 0; row < QUOTE_ROWS; row++) {
+    int idx = qlogic::quoteIndexForPageRow(pageIndex, row);
+    if (idx < 0 || idx >= QUOTE_TOTAL) {
+      v->names[row] = nullptr;
+      v->valid[row] = false;
+      v->z[row] = 0;
+      v->chg[row] = 0;
+      v->pct[row] = 0;
+      visibleInvalid = true;
+      continue;
+    }
+    v->names[row] = WATCHLIST[idx].name;
+    v->valid[row] = rec.rows[idx].valid;
+    if (!rec.rows[idx].valid) {
+      v->z[row] = 0;
+      v->chg[row] = 0;
+      v->pct[row] = 0;
+      visibleInvalid = true;
+      continue;
+    }
+    v->z[row] = rec.rows[idx].z;
+    qlogic::QuoteCalc c = qlogic::calcQuote(rec.rows[idx].z, rec.rows[idx].y);
+    v->chg[row] = c.chg;
+    v->pct[row] = c.pct;
   }
   qlogic::formatDateTW(rec.quoteDate, v->dateStr, sizeof v->dateStr);
   strncpy(v->timeStr, timeStr, sizeof v->timeStr - 1);
   v->timeStr[sizeof v->timeStr - 1] = '\0';
-  v->status = status;
+  v->pageIndex = pageIndex;
+  v->pageCount = PAGE_COUNT;
+  v->status = toStatusLiteral(qlogic::resolvedStatus(toViewStatus(status), visibleInvalid));
 }
 
 static void viewFromBatch(QuoteView* v, const qlogic::MarketBatch& mb,
-                          const char* timeStr, const char* status) {
+                          const char* timeStr, const char* status, uint8_t pageIndex) {
   qlogic::QuoteRecord rec = {};
   rec.version = qlogic::BLOB_VERSION;
   for (int i = 0; i < QUOTE_TOTAL; i++) rec.rows[i] = mb.rows[i];
   strcpy(rec.quoteDate, mb.date);
   strcpy(rec.quoteTime, mb.quoteTime);
-  viewFromRecord(v, rec, timeStr, status);
+  viewFromRecord(v, rec, timeStr, status, pageIndex);
 }
 
 static void localHHMM(uint32_t utc, char* buf, int cap) {
@@ -203,7 +240,7 @@ void setup() {
       char ts[8];
       localHHMM(cache.savedEpoch, ts, sizeof ts);
       QuoteView v;
-      viewFromRecord(&v, cache, ts, "更新失敗");
+      viewFromRecord(&v, cache, ts, "更新失敗", 0);
       uiShowQuotes(v);
     } else {
       uiShowMessage("NO WIFI", "check network");
@@ -217,7 +254,7 @@ void setup() {
       char ts[8];
       localHHMM(cache.savedEpoch, ts, sizeof ts);
       QuoteView v;
-      viewFromRecord(&v, cache, ts, "時間未同步");
+      viewFromRecord(&v, cache, ts, "時間未同步", 0);
       uiShowQuotes(v);
     } else {
       uiShowMessage("TIME NOT SYNC", "retry in 5 min");
@@ -241,7 +278,7 @@ void setup() {
     if (fr.ok) {
       char qt[8];
       hhmm(fr.mb.quoteTime, qt);
-      viewFromBatch(&v, fr.mb, qt, nullptr);
+      viewFromBatch(&v, fr.mb, qt, nullptr, 0);
       uiShowQuotes(v);
       if (!fr.isToday &&
           (st == qlogic::MarketState::Trading || st == qlogic::MarketState::PostClose)) {
@@ -266,7 +303,7 @@ void setup() {
     if (loadCache(&cache)) {
       char ts[8];
       localHHMM(cache.savedEpoch, ts, sizeof ts);
-      viewFromRecord(&v, cache, ts, "更新失敗");
+      viewFromRecord(&v, cache, ts, "更新失敗", 0);
       uiShowQuotes(v);
     } else {
       uiShowMessage("FETCH FAIL", "retry in 5 min");
@@ -292,14 +329,14 @@ void setup() {
           // 假日：渲染本次回應（舊交易日資料），睡到隔日 09:00
           char qt[8];
           hhmm(fr.mb.quoteTime, qt);
-          viewFromBatch(&v, fr.mb, qt, nullptr);
+          viewFromBatch(&v, fr.mb, qt, nullptr, 0);
           uiShowQuotes(v);
           goToDeepSleep(qlogic::nextDayAt9((uint32_t)time(nullptr)), !stuckGuard);
           return;
         }
         char qt[8];
         hhmm(fr.mb.quoteTime, qt);
-        viewFromBatch(&v, fr.mb, qt, nullptr);
+        viewFromBatch(&v, fr.mb, qt, nullptr, 0);
         uiShowQuotes(v);
         goToDeepSleep(qlogic::nextTradingBoundary((uint32_t)time(nullptr)), !stuckGuard);
         return;
@@ -309,7 +346,7 @@ void setup() {
       if (loadCache(&cache)) {
         char ts[8];
         localHHMM(cache.savedEpoch, ts, sizeof ts);
-        viewFromRecord(&v, cache, ts, "更新失敗");
+        viewFromRecord(&v, cache, ts, "更新失敗", 0);
         uiShowQuotes(v);
       } else {
         uiShowMessage("FETCH FAIL", "retry in 5 min");
@@ -338,7 +375,7 @@ void setup() {
         finalizeClose(fr.mb, today, (uint32_t)time(nullptr));
         char ts[8];
         localHHMM((uint32_t)time(nullptr), ts, sizeof ts);
-        viewFromBatch(&v, fr.mb, ts, nullptr);
+        viewFromBatch(&v, fr.mb, ts, nullptr, 0);
         uiShowQuotes(v);
         goToDeepSleep(qlogic::nextWeekdayAt9((uint32_t)time(nullptr)), !stuckGuard);
         return;
@@ -348,12 +385,12 @@ void setup() {
         if (have) {
           char ts[8];
           localHHMM(cache.savedEpoch, ts, sizeof ts);
-          viewFromRecord(&v, cache, ts, nullptr);
+          viewFromRecord(&v, cache, ts, nullptr, 0);
           uiShowQuotes(v);
         } else {
           char qt[8];
           hhmm(fr.mb.quoteTime, qt);
-          viewFromBatch(&v, fr.mb, qt, nullptr);
+          viewFromBatch(&v, fr.mb, qt, nullptr, 0);
           uiShowQuotes(v);
         }
         goToDeepSleep(qlogic::nextDayAt9(now), !stuckGuard);
@@ -363,7 +400,7 @@ void setup() {
       if (have) {
         char ts[8];
         localHHMM(cache.savedEpoch, ts, sizeof ts);
-        viewFromRecord(&v, cache, ts, "更新失敗");
+        viewFromRecord(&v, cache, ts, "更新失敗", 0);
         uiShowQuotes(v);
       } else {
         uiShowMessage("FETCH FAIL", "retry in 5 min");

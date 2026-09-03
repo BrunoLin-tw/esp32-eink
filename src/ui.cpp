@@ -76,9 +76,13 @@ void uiShowQuotes(const QuoteView& v) {
     u8g2.setForegroundColor(GxEPD_BLACK);
     u8g2.setCursor(16, 26);
     u8g2.print(v.dateStr);
-    int tw = u8g2.getUTF8Width(v.timeStr);
+    char right[32];
+    snprintf(right, sizeof right, "%u/%u 更新 %s",
+             static_cast<unsigned>(v.pageIndex + 1),
+             static_cast<unsigned>(v.pageCount), v.timeStr);
+    int tw = u8g2.getUTF8Width(right);
     u8g2.setCursor(272 - 16 - tw, 26);
-    u8g2.print(v.timeStr);
+    u8g2.print(right);
     display.drawLine(16, 40, 256, 40, GxEPD_BLACK);
     // 5 列（row0=加權指數：名稱 28px）
     for (int i = 0; i < QUOTE_ROWS; i++) {
@@ -87,9 +91,9 @@ void uiShowQuotes(const QuoteView& v) {
       u8g2.setCursor(16, y0 + (i == 0 ? 26 : 20));
       if (v.names[i]) u8g2.print(v.names[i]);
       char buf[24];
-      if (v.z[i] == 0.0) {
-        // 今日未成交（z="-"，spec 修訂七版）：現價與漲跌行均 "--"（22px）、無箭頭；
-        // 不得渲染為價格 0 或漲跌 -100%（y 必不為 0、真實價格必不為 0）
+      if (!v.valid[i] || v.z[i] == 0.0) {
+        // 未成交（z="-"，spec 修訂七版）或該列無效：現價與漲跌行均 "--"（22px）、
+        // 無箭頭；不得渲染為價格 0 或漲跌 -100%（y 必不為 0、真實價格必不為 0）
         setFontT(u8g2_font_logisoso22_tr);
         u8g2.setCursor(16, y0 + 72);
         u8g2.print("--");
