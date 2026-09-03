@@ -245,8 +245,8 @@ void setup() {
       (g_wake == ESP_SLEEP_WAKEUP_TIMER || g_wake == ESP_SLEEP_WAKEUP_EXT1);
   qlogic::normalizeRtcState(&g_rtc, deepSleepWake);
   bool menuWake = (g_wakeMask & (1ULL << BTN_MENU)) != 0;
-  LOGF("boot wake=%d mask=%lu page=%u target=%lu\n", (int)g_wake,
-       (unsigned long)g_wakeMask, g_rtc.pageIndex,
+  LOGF("boot wake=%d mask=%llu page=%u target=%lu\n", (int)g_wake,
+       (unsigned long long)g_wakeMask, g_rtc.pageIndex,
        (unsigned long)g_rtc.targetEpoch);
 
   pinMode(BTN_MENU, INPUT_PULLUP);
