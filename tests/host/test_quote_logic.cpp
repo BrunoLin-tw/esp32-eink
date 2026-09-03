@@ -634,6 +634,19 @@ static void testHardening() {
   printf("hardening ok\n");
 }
 
+static void testPageWakeRouting() {
+  assert(qlogic::pageWakeRequested(true, false, true, false));
+  assert(qlogic::pageWakeRequested(true, false, false, true));
+  assert(qlogic::pageWakeRequested(true, false, true, true));
+  assert(!qlogic::pageWakeRequested(true, true, true, false));
+  assert(!qlogic::pageWakeRequested(false, false, true, false));
+  assert(qlogic::wakeButtonsReleased(true, true, true));
+  assert(!qlogic::wakeButtonsReleased(false, true, true));
+  assert(!qlogic::wakeButtonsReleased(true, false, true));
+  assert(!qlogic::wakeButtonsReleased(true, true, false));
+  printf("page wake routing ok\n");
+}
+
 int main() {
   testWatchlistAndExCh();
   testParseNum();
@@ -650,6 +663,7 @@ int main() {
   testSchedule();
   testBlob();
   testPageRtc();
+  testPageWakeRouting();
   testViewStatus();
   testHardening();
   printf("ALL PASS\n");

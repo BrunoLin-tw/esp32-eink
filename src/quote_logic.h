@@ -486,6 +486,14 @@ inline WakeAction chooseWakeAction(bool menu, bool up, bool down) {
   return WakeAction::None;
 }
 
+inline bool pageWakeRequested(bool ext1Wake, bool menu, bool up, bool down) {
+  return ext1Wake && !menu && (up || down);
+}
+
+inline bool wakeButtonsReleased(bool menuHigh, bool upHigh, bool downHigh) {
+  return menuHigh && upHigh && downHigh;
+}
+
 inline void normalizeRtcState(QuoteRtcState* state, bool deepSleepWake) {
   if (state == nullptr) return;
   if (!deepSleepWake) {

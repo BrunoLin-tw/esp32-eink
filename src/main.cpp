@@ -8,7 +8,7 @@
 #include "ui.h"
 #include "watchlist.h"
 
-// 按鍵（active-low，docs/device-research.md）；v1 僅 MENU 有功能
+// 按鍵（active-low，docs/device-research.md）；MENU/UP/DOWN 可 EXT1 喚醒
 #define BTN_MENU 2
 #define BTN_UP   6
 #define BTN_DOWN 4
@@ -17,8 +17,19 @@
 #define WAIT_RELEASE_MS 2000
 
 static esp_sleep_wakeup_cause_t g_wake;
-static uint32_t g_wakeMask = 0;
+static uint64_t g_wakeMask = 0;
 static bool stuckGuard = false;
+RTC_DATA_ATTR qlogic::QuoteRtcState g_rtc = {0, 0};
+
+constexpr uint64_t BUTTON_WAKE_MASK =
+    (1ULL << BTN_MENU) | (1ULL << BTN_UP) | (1ULL << BTN_DOWN);
+
+static qlogic::WakeAction wakeAction(uint64_t mask) {
+  return qlogic::chooseWakeAction(
+      (mask & (1ULL << BTN_MENU)) != 0,
+      (mask & (1ULL << BTN_UP)) != 0,
+      (mask & (1ULL << BTN_DOWN)) != 0);
+}
 
 // ---------- NVS ----------（快取載入於 quote_store；此處僅讀取輔助）
 static bool loadCache(qlogic::QuoteRecord* rec) {
@@ -44,6 +55,7 @@ static const char* toStatusLiteral(qlogic::ViewStatus s) {
 
 static void viewFromRecord(QuoteView* v, const qlogic::QuoteRecord& rec,
                            const char* timeStr, const char* status, uint8_t pageIndex) {
+  if (!timeStr) return;
   bool visibleInvalid = false;
   for (int row = 0; row < QUOTE_ROWS; row++) {
     int idx = qlogic::quoteIndexForPageRow(pageIndex, row);
@@ -156,13 +168,18 @@ static void finalizeClose(const qlogic::MarketBatch& mb, const char* today,
 static void goToDeepSleep(uint32_t targetUtc, bool enableExt1) {
   uint32_t now = (uint32_t)time(nullptr);
   uint32_t delta;
+  uint32_t finalTarget;
   if (stuckGuard) {
     // 卡鍵（spec R4）：一律 5 分鐘 timer-only——停用 EXT1 且覆寫狀態路徑
     // 目標，避免 Weekend/PostClose 長睡讓板子長時間不可達
     delta = 300;
     enableExt1 = false;
+    finalTarget = now + 300;
+    g_rtc.targetEpoch = finalTarget;
     LOGF("[warn] stuck: 5 min timer-only retry\n");
   } else {
+    finalTarget = targetUtc;
+    g_rtc.targetEpoch = targetUtc;
     delta = qlogic::capSleep(now, targetUtc);
   }
   uint64_t us = (uint64_t)delta * 1000000ULL;
@@ -174,12 +191,21 @@ static void goToDeepSleep(uint32_t targetUtc, bool enableExt1) {
   esp_sleep_enable_ext1_wakeup(0, ESP_EXT1_WAKEUP_ANY_LOW);
   esp_sleep_enable_timer_wakeup(us);
   if (enableExt1) {
-    esp_sleep_enable_ext1_wakeup((1ULL << BTN_MENU), ESP_EXT1_WAKEUP_ANY_LOW);
+    esp_sleep_enable_ext1_wakeup(BUTTON_WAKE_MASK, ESP_EXT1_WAKEUP_ANY_LOW);
     rtc_gpio_init((gpio_num_t)BTN_MENU);
     rtc_gpio_set_direction((gpio_num_t)BTN_MENU, RTC_GPIO_MODE_INPUT_ONLY);
     rtc_gpio_pullup_en((gpio_num_t)BTN_MENU);
     rtc_gpio_pulldown_dis((gpio_num_t)BTN_MENU);
+    rtc_gpio_init((gpio_num_t)BTN_UP);
+    rtc_gpio_set_direction((gpio_num_t)BTN_UP, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pullup_en((gpio_num_t)BTN_UP);
+    rtc_gpio_pulldown_dis((gpio_num_t)BTN_UP);
+    rtc_gpio_init((gpio_num_t)BTN_DOWN);
+    rtc_gpio_set_direction((gpio_num_t)BTN_DOWN, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pullup_en((gpio_num_t)BTN_DOWN);
+    rtc_gpio_pulldown_dis((gpio_num_t)BTN_DOWN);
   }
+  LOGF("target=%lu\n", (unsigned long)finalTarget);
   LOGF("sleep %lus ext1=%d\n", (unsigned long)delta, enableExt1 ? 1 : 0);
   esp_deep_sleep_start();
 }
@@ -197,8 +223,8 @@ static uint32_t longSleepTarget(qlogic::MarketState st, uint32_t now) {
 static bool waitButtonsReleased(uint32_t timeoutMs) {
   uint32_t t0 = millis();
   while (millis() - t0 < timeoutMs) {
-    if (digitalRead(BTN_MENU) && digitalRead(BTN_UP) &&
-        digitalRead(BTN_DOWN) && digitalRead(BTN_PRESS)) {
+    if (qlogic::wakeButtonsReleased(digitalRead(BTN_MENU), digitalRead(BTN_UP),
+                                    digitalRead(BTN_DOWN))) {
       return true;
     }
     delay(10);
@@ -213,10 +239,15 @@ void setup() {
   delay(500);
   g_wake = esp_sleep_get_wakeup_cause();
   g_wakeMask = (g_wake == ESP_SLEEP_WAKEUP_EXT1)
-                   ? (uint32_t)esp_sleep_get_ext1_wakeup_status()
+                   ? esp_sleep_get_ext1_wakeup_status()
                    : 0;
+  bool deepSleepWake =
+      (g_wake == ESP_SLEEP_WAKEUP_TIMER || g_wake == ESP_SLEEP_WAKEUP_EXT1);
+  qlogic::normalizeRtcState(&g_rtc, deepSleepWake);
   bool menuWake = (g_wakeMask & (1ULL << BTN_MENU)) != 0;
-  LOGF("boot wake=%d mask=%u\n", (int)g_wake, g_wakeMask);
+  LOGF("boot wake=%d mask=%lu page=%u target=%lu\n", (int)g_wake,
+       (unsigned long)g_wakeMask, g_rtc.pageIndex,
+       (unsigned long)g_rtc.targetEpoch);
 
   pinMode(BTN_MENU, INPUT_PULLUP);
   pinMode(BTN_UP, INPUT_PULLUP);
@@ -224,6 +255,7 @@ void setup() {
   pinMode(BTN_PRESS, INPUT_PULLUP);
 
   // 卡鍵防護（R4）：等待釋放；stuck → 該輪 timer-only 5 分
+  // （action 強制視為 None：menuWake=false 且 cache-only 翻頁以 !stuckGuard 閘門）
   bool released = waitButtonsReleased(WAIT_RELEASE_MS);
   stuckGuard = !released;
   if (stuckGuard) {
@@ -233,6 +265,34 @@ void setup() {
 
   uiInit();
 
+  // 快取翻頁（UP/DOWN EXT1 wake）：只重畫目前快取頁，不得連 Wi-Fi；
+  // MENU 與純 timer wake 繼續走既有網路路徑
+  if (!stuckGuard &&
+      qlogic::pageWakeRequested(g_wake == ESP_SLEEP_WAKEUP_EXT1,
+                                (g_wakeMask & (1ULL << BTN_MENU)) != 0,
+                                (g_wakeMask & (1ULL << BTN_UP)) != 0,
+                                (g_wakeMask & (1ULL << BTN_DOWN)) != 0)) {
+    qlogic::WakeAction action = wakeAction(g_wakeMask);
+    uint8_t prevPage = g_rtc.pageIndex;
+    g_rtc.pageIndex = qlogic::changedPage(g_rtc.pageIndex, action);  // None 保持原頁
+    LOGF("page cache %u->%u\n", prevPage, g_rtc.pageIndex);
+    qlogic::QuoteRecord cache;
+    if (loadCache(&cache)) {
+      char ts[8];
+      localHHMM(cache.savedEpoch, ts, sizeof ts);
+      QuoteView view;
+      viewFromRecord(&view, cache, ts, nullptr, g_rtc.pageIndex);
+      uiShowQuotes(view);
+      goToDeepSleep(qlogic::resumeTarget((uint32_t)time(nullptr), g_rtc.targetEpoch), true);
+    } else {
+      uiShowMessage("NO DATA", "cache unavailable");
+      uint32_t retry = qlogic::noCacheRetryTarget((uint32_t)time(nullptr),
+                                                   g_rtc.targetEpoch);
+      goToDeepSleep(retry, true);
+    }
+    return;
+  }
+
   // Wi-Fi／NTP 失敗路徑（spec 修訂三版）
   if (!quoteWifiBegin(15000)) {
     qlogic::QuoteRecord cache;
@@ -240,7 +300,7 @@ void setup() {
       char ts[8];
       localHHMM(cache.savedEpoch, ts, sizeof ts);
       QuoteView v;
-      viewFromRecord(&v, cache, ts, "更新失敗", 0);
+      viewFromRecord(&v, cache, ts, "更新失敗", g_rtc.pageIndex);
       uiShowQuotes(v);
     } else {
       uiShowMessage("NO WIFI", "check network");
@@ -254,7 +314,7 @@ void setup() {
       char ts[8];
       localHHMM(cache.savedEpoch, ts, sizeof ts);
       QuoteView v;
-      viewFromRecord(&v, cache, ts, "時間未同步", 0);
+      viewFromRecord(&v, cache, ts, "時間未同步", g_rtc.pageIndex);
       uiShowQuotes(v);
     } else {
       uiShowMessage("TIME NOT SYNC", "retry in 5 min");
@@ -278,7 +338,7 @@ void setup() {
     if (fr.ok) {
       char qt[8];
       hhmm(fr.mb.quoteTime, qt);
-      viewFromBatch(&v, fr.mb, qt, nullptr, 0);
+      viewFromBatch(&v, fr.mb, qt, nullptr, g_rtc.pageIndex);
       uiShowQuotes(v);
       if (!fr.isToday &&
           (st == qlogic::MarketState::Trading || st == qlogic::MarketState::PostClose)) {
@@ -303,7 +363,7 @@ void setup() {
     if (loadCache(&cache)) {
       char ts[8];
       localHHMM(cache.savedEpoch, ts, sizeof ts);
-      viewFromRecord(&v, cache, ts, "更新失敗", 0);
+      viewFromRecord(&v, cache, ts, "更新失敗", g_rtc.pageIndex);
       uiShowQuotes(v);
     } else {
       uiShowMessage("FETCH FAIL", "retry in 5 min");
@@ -329,14 +389,14 @@ void setup() {
           // 假日：渲染本次回應（舊交易日資料），睡到隔日 09:00
           char qt[8];
           hhmm(fr.mb.quoteTime, qt);
-          viewFromBatch(&v, fr.mb, qt, nullptr, 0);
+          viewFromBatch(&v, fr.mb, qt, nullptr, g_rtc.pageIndex);
           uiShowQuotes(v);
           goToDeepSleep(qlogic::nextDayAt9((uint32_t)time(nullptr)), !stuckGuard);
           return;
         }
         char qt[8];
         hhmm(fr.mb.quoteTime, qt);
-        viewFromBatch(&v, fr.mb, qt, nullptr, 0);
+        viewFromBatch(&v, fr.mb, qt, nullptr, g_rtc.pageIndex);
         uiShowQuotes(v);
         goToDeepSleep(qlogic::nextTradingBoundary((uint32_t)time(nullptr)), !stuckGuard);
         return;
@@ -346,7 +406,7 @@ void setup() {
       if (loadCache(&cache)) {
         char ts[8];
         localHHMM(cache.savedEpoch, ts, sizeof ts);
-        viewFromRecord(&v, cache, ts, "更新失敗", 0);
+        viewFromRecord(&v, cache, ts, "更新失敗", g_rtc.pageIndex);
         uiShowQuotes(v);
       } else {
         uiShowMessage("FETCH FAIL", "retry in 5 min");
@@ -375,7 +435,7 @@ void setup() {
         finalizeClose(fr.mb, today, (uint32_t)time(nullptr));
         char ts[8];
         localHHMM((uint32_t)time(nullptr), ts, sizeof ts);
-        viewFromBatch(&v, fr.mb, ts, nullptr, 0);
+        viewFromBatch(&v, fr.mb, ts, nullptr, g_rtc.pageIndex);
         uiShowQuotes(v);
         goToDeepSleep(qlogic::nextWeekdayAt9((uint32_t)time(nullptr)), !stuckGuard);
         return;
@@ -385,12 +445,12 @@ void setup() {
         if (have) {
           char ts[8];
           localHHMM(cache.savedEpoch, ts, sizeof ts);
-          viewFromRecord(&v, cache, ts, nullptr, 0);
+          viewFromRecord(&v, cache, ts, nullptr, g_rtc.pageIndex);
           uiShowQuotes(v);
         } else {
           char qt[8];
           hhmm(fr.mb.quoteTime, qt);
-          viewFromBatch(&v, fr.mb, qt, nullptr, 0);
+          viewFromBatch(&v, fr.mb, qt, nullptr, g_rtc.pageIndex);
           uiShowQuotes(v);
         }
         goToDeepSleep(qlogic::nextDayAt9(now), !stuckGuard);
@@ -400,7 +460,7 @@ void setup() {
       if (have) {
         char ts[8];
         localHHMM(cache.savedEpoch, ts, sizeof ts);
-        viewFromRecord(&v, cache, ts, "更新失敗", 0);
+        viewFromRecord(&v, cache, ts, "更新失敗", g_rtc.pageIndex);
         uiShowQuotes(v);
       } else {
         uiShowMessage("FETCH FAIL", "retry in 5 min");
