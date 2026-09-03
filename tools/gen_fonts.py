@@ -31,10 +31,39 @@ OUT_H = "src/fonts_quote.h"
 # glyph manifest（明列；新增字元 = 修改這裡後重跑）
 # 各組補 A/1(/g：bdfconv 以 glyph 'A' 定 ascent_A、'g' 定 descent_g，
 # 缺這些參照字會讓 u8g2_GetAscent()/GetDescent() 回傳錯誤值（quote20/28 = 0）
-G16 = "週日一二三四五六更新失敗時間未同步0123456789:- " + "A1(g"
-G20 = "台積電鴻海元大灣富邦05" + "A1(g"
+G16 = "週日一二三四五六更新失敗時間未同步部分0123456789:-/ " + "A1(g"
+G20 = "台積電鴻海元大灣富邦中興華金鋼05" + "A1(g"
 G28 = "加權指數" + "A1(g"
 MANIFEST = {16: G16, 20: G20, 28: G28}
+
+EXPECTED_FONT_SHA = "faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb"
+EXPECTED_PILLOW = "12.3.0"
+EXPECTED_U8G2 = "2.37.1"
+
+
+def validate_environment(font_sha: str, pillow: str, u8g2: str) -> None:
+    if font_sha != EXPECTED_FONT_SHA:
+        sys.exit(f"字型 SHA256 不符：{font_sha}")
+    if pillow != EXPECTED_PILLOW:
+        sys.exit(f"Pillow 版本不符：{pillow}")
+    if u8g2 != EXPECTED_U8G2:
+        sys.exit(f"bdfconv u8g2 tag 不符：{u8g2}")
+
+
+def output_banner(font_sha: str) -> str:
+    return (
+        "// 自動產生：tools/gen_fonts.py（勿手改）\n"
+        f"// font: NotoSansCJK-Bold.ttc sha256={font_sha} (SIL OFL 1.0)\n"
+        f"// PIL {EXPECTED_PILLOW}, bdfconv u8g2@{EXPECTED_U8G2}\n"
+    )
+
+
+def detect_u8g2_version() -> str:
+    result = subprocess.run(
+        ["git", "-C", U8G2_DIR, "describe", "--tags", "--exact-match", "--dirty"],
+        capture_output=True, text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def resolve_font(cli_font: str | None) -> str:
@@ -126,24 +155,20 @@ def extract_array(c_path: str) -> str:
     return text[i:]
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--font", help="覆寫字型路徑（限 OFL 授權之 Noto CJK）")
-    args = ap.parse_args()
+def generate(font_path: str, out_c: str, out_h: str) -> None:
+    sha = hashlib.sha256(open(font_path, "rb").read()).hexdigest()
+    rev = detect_u8g2_version()
+    validate_environment(sha, PIL.__version__, rev)
     if not os.path.exists(BDFCONV):
         sys.exit(
             "bdfconv 不存在；先執行："
             "git clone --depth 1 --branch 2.37.1 https://github.com/olikraus/u8g2 /tmp/opencode/u8g2"
             " && make -C /tmp/opencode/u8g2/tools/font/bdfconv"
         )
-    font_path = resolve_font(args.font)
-    os.makedirs("src", exist_ok=True)
-    sha = hashlib.sha256(open(font_path, "rb").read()).hexdigest()
-    try:
-        rev = subprocess.run(["git", "-C", U8G2_DIR, "describe", "--tags"],
-                             capture_output=True, text=True).stdout.strip()
-    except Exception:
-        rev = "unknown"
+    for p in (out_c, out_h):
+        d = os.path.dirname(p)
+        if d:
+            os.makedirs(d, exist_ok=True)
     parts = []
     for size, chars in MANIFEST.items():
         bdf = f"/tmp/opencode/quote{size}.bdf"
@@ -161,25 +186,37 @@ def main() -> None:
         parts.append(extract_array(tmp_c))
         print(f"size {size}: {len(set(chars))} glyphs ok (bdfconv rc=0)")
     banner = (
-        "// 自動產生：tools/gen_fonts.py（勿手改）\n"
-        f"// font: {font_path} sha256={sha[:16]}... (SIL OFL 1.0)\n"
-        f"// PIL {PIL.__version__}, bdfconv u8g2@{rev}\n"
-        "#include <stdint.h>\n"
-        "#ifndef U8G2_FONT_SECTION\n"
-        "#define U8G2_FONT_SECTION(s)\n"
-        "#endif\n"
+        output_banner(sha)
+        + "#include <stdint.h>\n"
+        + "#ifndef U8G2_FONT_SECTION\n"
+        + "#define U8G2_FONT_SECTION(s)\n"
+        + "#endif\n"
     )
-    with open(OUT_C, "w") as f:
-        f.write(banner + "\n".join(parts))
-    with open(OUT_H, "w") as f:
-        externs = "".join(
-            f"extern const uint8_t u8g2_font_quote{size}[];\n" for size in MANIFEST
-        )
-        f.write(
-            "// 自動產生對應宣告：tools/gen_fonts.py（勿手改）\n#pragma once\n#include <stdint.h>\n"
-            + externs
-        )
-    print(f"ok -> {OUT_C}, {OUT_H}")
+    c_text = banner + "\n".join(parts)
+    externs = "".join(
+        f"extern const uint8_t u8g2_font_quote{size}[];\n" for size in MANIFEST
+    )
+    h_text = (
+        "// 自動產生對應宣告：tools/gen_fonts.py（勿手改）\n#pragma once\n#include <stdint.h>\n"
+        + externs
+    )
+    out_c_tmp = out_c + ".tmp"
+    out_h_tmp = out_h + ".tmp"
+    with open(out_c_tmp, "w") as f:
+        f.write(c_text)
+    with open(out_h_tmp, "w") as f:
+        f.write(h_text)
+    os.replace(out_c_tmp, out_c)
+    os.replace(out_h_tmp, out_h)
+    print(f"ok -> {out_c}, {out_h}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--font", help="覆寫字型路徑（限 OFL 授權之 Noto CJK）")
+    args = ap.parse_args()
+    font_path = resolve_font(args.font)
+    generate(font_path, OUT_C, OUT_H)
 
 
 if __name__ == "__main__":
