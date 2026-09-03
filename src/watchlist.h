@@ -56,11 +56,3 @@ inline bool buildQuoteExChPrefix(char* out, size_t cap, int count) {
 inline bool buildQuoteExCh(char* out, size_t cap) {
   return buildQuoteExChPrefix(out, cap, QUOTE_TOTAL);
 }
-
-// 過渡 shim：Task 6 刪除。
-static constexpr int WATCH_N = PAGE_ROWS;
-inline const char* quoteExCh() {
-  static char out[96];
-  static bool built = buildQuoteExChPrefix(out, sizeof out, PAGE_ROWS);
-  return built ? out : "";
-}
