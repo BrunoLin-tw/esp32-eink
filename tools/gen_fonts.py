@@ -59,10 +59,13 @@ def output_banner(font_sha: str) -> str:
 
 
 def detect_u8g2_version() -> str:
-    result = subprocess.run(
-        ["git", "-C", U8G2_DIR, "describe", "--tags", "--exact-match", "--dirty"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", U8G2_DIR, "describe", "--tags", "--exact-match", "--dirty"],
+            capture_output=True, text=True,
+        )
+    except OSError:
+        return ""
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
@@ -156,7 +159,8 @@ def extract_array(c_path: str) -> str:
 
 
 def generate(font_path: str, out_c: str, out_h: str) -> None:
-    sha = hashlib.sha256(open(font_path, "rb").read()).hexdigest()
+    with open(font_path, "rb") as f:
+        sha = hashlib.sha256(f.read()).hexdigest()
     rev = detect_u8g2_version()
     validate_environment(sha, PIL.__version__, rev)
     if not os.path.exists(BDFCONV):
@@ -175,13 +179,16 @@ def generate(font_path: str, out_c: str, out_h: str) -> None:
         tmp_c = f"/tmp/opencode/quote{size}.c"
         build_bdf(size, chars, bdf, font_path)
         # 自檢：BDF 含全部 manifest glyph
-        body = open(bdf).read()
+        with open(bdf) as f:
+            body = f.read()
         missing = [c for c in chars if f"ENCODING {ord(c)}\n" not in body]
         if missing:
             sys.exit(f"size {size} 缺 glyph: {missing}")
         run_bdfconv(bdf, tmp_c, f"u8g2_font_quote{size}", chars)
         n = len(set(chars))
-        if f"Glyphs: {n}/{n}" not in open(tmp_c).read()[:200]:
+        with open(tmp_c) as f:
+            head = f.read()[:200]
+        if f"Glyphs: {n}/{n}" not in head:
             sys.exit(f"size {size}: bdfconv 輸出 glyph 數不符（manifest {n}）")
         parts.append(extract_array(tmp_c))
         print(f"size {size}: {len(set(chars))} glyphs ok (bdfconv rc=0)")
