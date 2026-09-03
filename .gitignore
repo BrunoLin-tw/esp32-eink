@@ -27,3 +27,5 @@ __pycache__/
 raw_photos/
 # 視覺輔助暫存（brainstorm 過程檔案）
 .superpowers/
+# git worktree 隔離工作區
+.worktrees/
