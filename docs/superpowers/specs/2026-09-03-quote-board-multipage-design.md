@@ -1,7 +1,7 @@
 # 報價看板多頁設計規格（Quote Board v2）
 
 - 日期：2026-09-03
-- 狀態：設計已核准，待書面規格審閱
+- 狀態：已核准（2026-09-03 書面規格審閱完成）
 - 基礎版本：`quote-v1`（commit `6fed8c8`）
 - 關聯規格：`docs/superpowers/specs/2026-08-29-quote-board-design.md`
 
