@@ -1073,8 +1073,9 @@ String url = String("https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=")
 
 - [ ] **Step 3: 把 main 的所有總資料 loop 改成 `QUOTE_TOTAL`**
 
-`fetchUpdate()`、`finalizeClose()`、batch→record copy 都必須複製 9 列；所有
-`viewFromRecord()`／`viewFromBatch()` 呼叫都傳入 RTC `pageIndex`。不得以
+`fetchUpdate()`、`finalizeClose()`、batch→record copy 都必須複製 9 列。全部
+`viewFromRecord()`／`viewFromBatch()` 呼叫維持傳字面 `0`（RTC `g_rtc.pageIndex`
+由 Task 7 接線；本任務不得發明 RTC 狀態）。不得以
 `PAGE_ROWS` 複製 NVS 或 batch。
 
 - [ ] **Step 4: 跑完整無硬體驗證**
@@ -1214,7 +1215,7 @@ if (loadCache(&cache)) {
   char ts[8];
   localHHMM(cache.savedEpoch, ts, sizeof ts);
   QuoteView view;
-  viewFromRecord(&view, cache, g_rtc.pageIndex, ts, nullptr);
+  viewFromRecord(&view, cache, ts, nullptr, g_rtc.pageIndex);
   uiShowQuotes(view);
   goToDeepSleep(qlogic::resumeTarget((uint32_t)time(nullptr), g_rtc.targetEpoch), true);
 } else {
@@ -1228,6 +1229,10 @@ return;
 
 這段必須位於 `quoteWifiBegin()` 前。MENU action 繼續走既有網路路徑；純 timer
 wake 不得誤進 cache-only 分支。
+
+另在 `viewFromRecord()` 入口加 `timeStr` 空指標防護（與 `status` 可為 `nullptr`
+的契約對稱）：`if (!timeStr) return;` 或等價早退。目前全部呼叫端皆傳有效 stack
+字串，此行為防禦性修正，不改變現行行為。
 
 - [ ] **Step 8: 加強 serial 可觀察性**
 
