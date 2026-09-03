@@ -49,6 +49,10 @@ STOCKS_PER_PAGE = 4
 PAGE_ROWS = 5
 ```
 
+內部 `pageIndex` 一律從 0 起算，合法範圍是 `[0, PAGE_COUNT)`；header 顯示值是
+`pageIndex + 1`。所以內部 0／1 分別對應畫面 `1/2`／`2/2`。本文其餘「第 1 頁」
+與「第 2 頁」均指畫面顯示頁碼。
+
 所有 watchlist 項目目前都是 TWSE 上市商品，URL 使用 `tse_` 前綴。支援 TPEx
 不是本版目標。
 
@@ -128,8 +132,24 @@ UI 不直接讀取 9 列總資料，也不自行決定分頁切片。
 - 單獨 UP 或 DOWN：執行對應翻頁。
 
 頁碼保存在 `RTC_DATA_ATTR`，跨 deep sleep 保留。非 deep-sleep 啟動（wake cause
-不是 TIMER／EXT1）須把頁碼與原睡眠目標初始化，回到第 1 頁。每次使用前也要
-把越界頁碼歸零，避免 RTC 記憶體或後續清單變更造成越界。
+不是 TIMER／EXT1）須把頁碼設為 0、原睡眠目標 epoch 設為 0（明確表示無效），
+回到第 1 頁。每次使用前也要把越界頁碼歸零，避免 RTC 記憶體或後續清單變更
+造成越界。
+
+RTC 狀態與初始化規則須抽成 host 可測的純邏輯：
+
+```cpp
+struct QuoteRtcState {
+  uint8_t pageIndex;
+  uint32_t targetEpoch;
+};
+
+void normalizeRtcState(QuoteRtcState* state, bool deepSleepWake);
+```
+
+`deepSleepWake=false` 時，函式無條件把兩欄設為 0；`true` 時只把越界
+`pageIndex` 歸零，不改 `targetEpoch`，目標有效性由睡眠目標函式另行判定。
+`main.cpp` 只負責把 wake cause 轉成這個 bool，不得在硬體分支複製初始化規則。
 
 ### 快取翻頁路徑
 
@@ -144,7 +164,9 @@ UP／DOWN 喚醒不連 Wi-Fi、不做 NTP、不呼叫 TWSE API，也不寫 NVS�
 6. hibernate、關閉 GPIO7，睡回原本的排程目標。
 
 若按鍵 2 秒後仍未放開，不執行 MENU 或翻頁動作，該輪改用 300 秒 timer-only；
-這是 v1 卡鍵規則 R4 對三個喚醒鍵的延伸。
+這是 v1 卡鍵規則 R4 對三個喚醒鍵的延伸。卡鍵等待與判定只讀 MENU、UP、DOWN；
+EXIT 與 PRESS 不在 EXT1 mask，也不得因為被按住而觸發 stuck guard。實作時不可
+直接沿用 v1 把 PRESS 納入 `waitButtonsReleased()` 的條件。
 
 ### 保留原睡眠目標
 
@@ -161,6 +183,10 @@ epoch」。RTC 目標有效的定義是非 0，且與目前 RTC epoch 的差距�
 因此 09:04:40 完成翻頁時仍會在 09:05 喚醒更新；不會直接跳到 09:10。收盤後
 或週末翻頁也會回到原本的長睡目標。
 
+唯一例外是「翻頁但 NVS 無有效快取」：該路徑會產生下節定義的 retry target，
+並以 retry target 覆寫 RTC `targetEpoch`。使用者在 retry 到期前再次翻頁時，
+仍睡回同一個 deadline，不得把 300 秒等待從第二次按鍵重新起算。
+
 ## 資料抓取
 
 一次 HTTPS 請求帶全部 9 個 `ex_ch`：
@@ -171,9 +197,22 @@ tse_1513.tw|tse_2412.tw|tse_2881.tw|tse_2002.tw
 ```
 
 實際參數不得在原始碼另存第二份清單，仍由 `WATCHLIST` 組裝。組裝介面改為可
-回報成功／失敗的 bounded function；目的 buffer 至少 192 bytes，逐次 append
-都要檢查截斷。若 buffer 不足，整次抓取在發出 HTTP 前失敗，走既有快取與重試
-路徑。HTTP response 32 KB cap、TLS 根 CA、timeout 與 User-Agent 沿用 v1。
+回報成功／失敗的純 C++ bounded function，固定簽名與契約如下：
+
+```cpp
+bool buildQuoteExCh(char* out, size_t cap);
+```
+
+- `cap` 包含字串結尾 `\0`；正式呼叫端配置 `char exCh[192]`。
+- 成功時回傳 `true`，`out` 內是完整、以 `\0` 結尾的參數字串。
+- `out == nullptr` 或 `cap == 0` 時回傳 `false`，不得寫入記憶體。
+- 任一步驟發現空間不足時回傳 `false`；若 `out != nullptr && cap > 0`，失敗後
+  保證 `out[0] == '\0'`，不得把部分字串交給 HTTP 層。
+- 函式不得使用 static buffer、`Arduino.h` 或 `strlcat`；相同輸入可重入呼叫。
+
+`quote_store.cpp` 先呼叫此函式，只有成功才組 URL 與發出 HTTP。失敗則走既有
+快取與重試路徑。HTTP response 32 KB cap、TLS 根 CA、timeout 與 User-Agent
+沿用 v1。
 
 ## 容錯驗證
 
@@ -249,7 +288,14 @@ QuoteRecord {
 - Noto Sans CJK Bold 輸入 SHA256 固定為
   `faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb`。
 - Pillow 固定為 12.3.0；`bdfconv` 固定使用 u8g2 tag 2.37.1。
-- 產物 metadata 只記字型 basename、SHA256 與工具版本，不寫本機絕對路徑。
+- `gen_fonts.py` 在產生 BDF 前須計算輸入檔完整 SHA256，並比較固定值；不符就
+  以非 0 結束。`PIL.__version__` 也須恰為 `12.3.0`。
+- `bdfconv` 版本以
+  `git -C /tmp/opencode/u8g2 describe --tags --exact-match --dirty` 驗證；輸出須
+  恰為 `2.37.1`。加入 `--dirty` 是為了讓 tag 上有未提交修改時得到
+  `2.37.1-dirty` 並拒絕產生字型。
+- 產物 metadata 的字型名稱固定寫字面值 `NotoSansCJK-Bold.ttc`，另記完整
+  SHA256 與工具版本；不得從實際輸入 basename 取值，也不得寫本機絕對路徑。
 - 輸入 hash 或工具版本不符時直接失敗，不接受悄悄產生不同字形。
 
 20px 個股名稱字型加入第二頁四個名稱，新增加的中文字是：
@@ -274,7 +320,8 @@ ASCII `/`；前兩字用於「部分失敗」，斜線用於 header `1/2`。
 | `src/main.cpp` | 喚醒分流、RTC page／target、快取翻頁、目前頁渲染 |
 | `src/ui.h/.cpp` | 單頁 5 列、`1/2`、每列有效狀態與「部分失敗」 |
 | `tools/gen_fonts.py` | 新名稱與狀態字 glyph manifest |
-| `tests/host/test_quote_logic.cpp` | 9 列驗證、切頁、RTC target、NVS v2 回歸測試 |
+| `tests/host/test_quote_logic.cpp` | 9 列驗證、切頁、RTC state／target、NVS v2 回歸測試 |
+| `tests/host/test_gen_fonts.py` | 字型環境拒絕條件與 metadata／重產可重現測試 |
 
 `watchlist.h` 須改為不依賴 `Arduino.h` 或 `ui.h` 的純 C++ header，避免 UI、清單與
 quote logic 形成 include cycle，也讓安全 URL 組裝能由 host 直接測試。
@@ -291,8 +338,10 @@ quote logic 形成 include cycle，也讓安全 URL 組裝能由 host 直接測�
 - NTP 失敗：不判斷市場狀態，顯示「時間未同步」，5 分短睡；優先級高於快取
   的「部分失敗」。
 - 快取翻頁時 NVS 無效：顯示 `NO DATA`／`cache unavailable`。有效 RTC 目標在
-  未來時，睡到 `min(target, now + 300)`；有效目標已到或已過時睡 1 秒；RTC
-  目標無效時睡 300 秒。這是無快取時唯一規則，優先於一般快取翻頁的睡回原目標。
+  未來時，令 `retryTarget=min(target, now + 300)`；有效目標已到或已過時令
+  `retryTarget=now+1`；RTC 目標無效時令 `retryTarget=now+300`。顯示完成後先把
+  RTC `targetEpoch` 覆寫為 `retryTarget`，再睡到該時間。這是無快取時唯一規則，
+  優先於一般快取翻頁的睡回原目標。
 - 任一喚醒鍵 stuck-low：不執行該鍵動作，300 秒 timer-only。
 
 ## 非目標
@@ -316,18 +365,28 @@ quote logic 形成 include cycle，也讓安全 URL 組裝能由 host 直接測�
 5. 未知代碼被忽略，不改變 9 個預期 slot 的對應關係。
 6. 無效個股寫入固定表示；NVS 載入拒絕其他無效表示。
 7. 頁面切片：兩頁 index 0 相同；第 1 頁對應 1 至 4，第 2 頁對應 5 至 8。
-8. UP／DOWN 迴繞、多鍵優先級與 RTC 頁碼越界歸零。
+8. UP／DOWN 迴繞、多鍵優先級與 RTC 頁碼越界歸零；
+   `normalizeRtcState(..., false)` 必須同時得到 `pageIndex=0`、`targetEpoch=0`，
+   `true` 則保留有效頁碼與 target。
 9. RTC 原目標在未來時保留，含剩餘 1 至 29 秒；已到／已過時睡 1 秒；超出
    正負 7 天或為 0 時睡 300 秒。另測 09:04:40 翻頁不跳過 09:05 更新。
-10. 9 檔 `ex_ch` 完整且未截斷；人為縮小 buffer 時安全失敗。
+   無快取時驗證 RTC target 被覆寫為 retry target；retry 前再次翻頁仍使用同一
+   deadline，不得延後 300 秒。
+10. 9 檔 `ex_ch` 完整且未截斷。令 `L = strlen(expected)`：`cap=L+1` 成功且
+    NUL-terminated；`cap=L` 失敗。失敗測試須預先填滿非 0 資料，再確認
+    `out[0]=='\0'`；另測 `nullptr`、`cap=0` 及連續兩次呼叫輸出相同。
 11. 較新 `t` 只出現在無效列時，`quoteTime` 忽略該列；至少退回有效指數時間。
 12. 失敗列只在另一頁時，目前頁不顯示「部分失敗」；並測狀態字四級優先序。
 13. NVS version 2、`sizeof`／`alignof`／`offsetof` layout 斷言、`recordSane` 與
     write-on-change 回歸。
 14. 字型 manifest 含全部新名稱、「部分失敗」及 header `/`；指定字型 hash、
-    Pillow 12.3.0 與 u8g2 2.37.1 環境重產兩次，輸出 byte-identical。
-15. 既有 quote logic 與 rotation golden tests 全部通過。
-16. `pio run` 編譯成功。
+    Pillow 12.3.0 與 u8g2 2.37.1 環境重產兩次，輸出 byte-identical。同一字型
+    複製成不同路徑與檔名後重產，metadata 與完整輸出仍須相同。
+15. `test_gen_fonts.py` 驗證四種拒絕案例：錯誤字型 SHA、非 12.3.0 的 Pillow、
+    `bdfconv` 不在 exact tag（commit hash／其他 tag）、`2.37.1-dirty`；四者都須
+    非 0 結束且不得覆寫既有 `fonts_quote.c/.h`。
+16. 既有 quote logic 與 rotation golden tests 全部通過。
+17. `pio run` 編譯成功。
 
 ### 實機驗證
 
@@ -341,7 +400,7 @@ quote logic 形成 include cycle，也讓安全 URL 組裝能由 host 直接測�
 7. 用測試 payload 驗證：正常未成交列顯示 `--` 且無「部分失敗」；個股無效
    顯示 `--`＋「部分失敗」。
 8. 按住 MENU、UP、DOWN 個別開機，均進入 300 秒 timer-only；放開後恢復三鍵
-   EXT1。
+   EXT1。另確認按住 EXIT 或 PRESS 不會觸發 stuck guard。
 9. 13:30 緩衝與 13:35 定格仍成功；定格後兩頁顯示同一批日期／時間資料。
 10. 20 次以上混合 timer／翻頁／MENU sleep-wake，無 Busy Timeout、喚醒迴圈、
     頁碼越界或 NVS 異常。
