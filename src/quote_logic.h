@@ -3,6 +3,7 @@
 // host 測試：tests/host/test_quote_logic.cpp
 //   g++ -std=c++17 -I src -I .pio/libdeps/esp32eink/ArduinoJson/src ...
 #include <ArduinoJson.h>
+#include "watchlist.h"
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -12,7 +13,6 @@
 namespace qlogic {
 
 static constexpr int TZ_TW = 8 * 3600;
-static const char* const EXPECT_CODES[5] = {"t00", "2330", "2317", "0050", "006208"};
 
 enum {
   V_OK = 0,
@@ -25,6 +25,7 @@ enum {
 
 struct QuoteRow {
   char code[12];
+  bool valid;
   double z;
   double y;
   char t[9];
@@ -40,14 +41,21 @@ struct RawQuote {
 };
 
 struct RawBatch {
-  RawQuote rows[5];
+  RawQuote rows[QUOTE_TOTAL];
+  uint8_t count[QUOTE_TOTAL];
 };
 
 struct MarketBatch {
-  QuoteRow rows[5];
+  QuoteRow rows[QUOTE_TOTAL];
   char date[9];
   char quoteTime[9];
 };
+
+inline int expectedIndex(const char* code) {
+  for (int i = 0; i < QUOTE_TOTAL; ++i)
+    if (strcmp(code, WATCHLIST[i].code) == 0) return i;
+  return -1;
+}
 
 // Howard Hinnant civil_from_days / days_from_civil（公有領域）
 inline void civilFromDays(int64_t z, int* y, unsigned* m, unsigned* d) {
@@ -118,90 +126,112 @@ inline bool parseNum(const char* s, double* out) {
   return true;
 }
 
+inline bool convertRow(const RawQuote& raw, QuoteRow* out) {
+  if (raw.name[0] == '\0' || !validTime(raw.t) || !validDate(raw.d)) return false;
+  double z = 0, y = 0;
+  if (!parseNum(raw.z, &z) && strcmp(raw.z, "-") != 0) return false;
+  if (!parseNum(raw.y, &y) || y == 0.0) return false;
+  out->valid = true;
+  out->z = z;
+  out->y = y;
+  strcpy(out->t, raw.t);
+  return true;
+}
+
+inline void invalidateRow(QuoteRow* row, const char* code) {
+  *row = QuoteRow{};
+  strncpy(row->code, code, sizeof(row->code) - 1);
+}
+
+inline int validateRequiredRow(const RawQuote& raw, QuoteRow* out) {
+  if (raw.name[0] == '\0' || !validTime(raw.t) || !validDate(raw.d)) return V_FORMAT;
+  double z = 0, y = 0;
+  if (!parseNum(raw.z, &z)) {
+    // 盤中未成交：z 為 "-" → 記 0，UI 顯示 --；y 仍必須是有效數字
+    if (strcmp(raw.z, "-") == 0) {
+      z = 0.0;
+    } else {
+      return V_NUMERIC;
+    }
+  }
+  if (!parseNum(raw.y, &y) || y == 0.0) return V_NUMERIC;
+  out->valid = true;
+  out->z = z;
+  out->y = y;
+  strcpy(out->t, raw.t);
+  return V_OK;
+}
+
 // 非 V_OK 時 *out 內容不可用（可能部分寫入）
+// 順序固定：(1) count[0]!=1 → V_STRUCT；(2) index 欄位錯 → V_NUMERIC/V_FORMAT；
+// (3) date 取 index d；(4) 個股逐列降級；(5) quoteTime 取有效列最大
 inline int validateBatch(const RawBatch& in, MarketBatch* out) {
-  bool seen[5] = {false, false, false, false, false};
-  char date[9] = {0};
-  char latestT[9] = {0};
-  for (int i = 0; i < 5; i++) {
+  *out = MarketBatch{};
+  for (int i = 0; i < QUOTE_TOTAL; ++i) {
+    strncpy(out->rows[i].code, WATCHLIST[i].code, sizeof(out->rows[i].code) - 1);
+    out->rows[i].code[sizeof(out->rows[i].code) - 1] = '\0';
+  }
+  if (in.count[0] != 1) return V_STRUCT;
+  int rc = validateRequiredRow(in.rows[0], &out->rows[0]);
+  if (rc != V_OK) return rc;
+  strncpy(out->date, in.rows[0].d, 8);
+  out->date[8] = '\0';
+  for (int i = 1; i < QUOTE_TOTAL; ++i) {
+    if (in.count[i] != 1) {
+      invalidateRow(&out->rows[i], WATCHLIST[i].code);
+      continue;
+    }
     const RawQuote& r = in.rows[i];
-    int idx = -1;
-    for (int j = 0; j < 5; j++) {
-      if (strcmp(r.code, EXPECT_CODES[j]) == 0) {
-        idx = j;
-        break;
-      }
+    if (!convertRow(r, &out->rows[i])) {
+      invalidateRow(&out->rows[i], WATCHLIST[i].code);
+      continue;
     }
-    if (idx < 0 || seen[idx]) return V_STRUCT;
-    seen[idx] = true;
-    if (r.name[0] == '\0') return V_FORMAT;
-    double z, y;
-    if (!parseNum(r.z, &z)) {
-      // 盤中未成交：z 為 "-"（spec 修訂七版，2026-09-01 盤中實測）→ 記 0，
-      // UI 顯示 --；y 仍必須是有效數字
-      if (strcmp(r.z, "-") == 0) {
-        z = 0.0;
-      } else {
-        return V_NUMERIC;
-      }
+    if (strncmp(r.d, out->date, 8) != 0) {
+      invalidateRow(&out->rows[i], WATCHLIST[i].code);
+      continue;
     }
-    if (!parseNum(r.y, &y)) return V_NUMERIC;
-    if (y == 0.0) return V_NUMERIC;
-    if (!validTime(r.t)) return V_FORMAT;
-    if (!validDate(r.d)) return V_FORMAT;
-    if (date[0] == '\0') {
-      strncpy(date, r.d, 8);
-      date[8] = '\0';
-    } else if (strncmp(date, r.d, 8) != 0) {
-      return V_DATE_DIFF;
-    }
-    if (strcmp(r.t, latestT) > 0) {
-      strncpy(latestT, r.t, 8);
+  }
+  char latestT[9] = {0};
+  for (int i = 0; i < QUOTE_TOTAL; ++i) {
+    if (!out->rows[i].valid) continue;
+    if (strcmp(out->rows[i].t, latestT) > 0) {
+      strncpy(latestT, out->rows[i].t, 8);
       latestT[8] = '\0';
     }
-    strncpy(out->rows[idx].code, EXPECT_CODES[idx], 11);
-    out->rows[idx].code[11] = '\0';
-    out->rows[idx].z = z;
-    out->rows[idx].y = y;
-    strncpy(out->rows[idx].t, r.t, 8);
-    out->rows[idx].t[8] = '\0';
   }
-  for (int j = 0; j < 5; j++)
-    if (!seen[j]) return V_STRUCT;
-  strncpy(out->date, date, 8);
-  out->date[8] = '\0';
   strncpy(out->quoteTime, latestT, 8);
   out->quoteTime[8] = '\0';
   return V_OK;
 }
 
 // API JSON → RawBatch（ArduinoJson v7；host 可測）。
-// 契約：msgArray 恰 5 列、每列 c 必為預期代碼（未知代碼→V_STRUCT）。
-// 回傳 V_OK（填入完成，順序＝API 回傳順序）或 V_JSON/V_STRUCT。
+// 契約：只拒絕壞 JSON 或不存在的 msgArray；未知代碼忽略；預期代碼用飽和計數
+// 區分 0／1／重複（≥2），只有第一次出現時 bounded copy 欄位。
+// 回傳 V_OK 或 V_JSON。
 inline int parseJsonToRaw(const char* body, size_t len, RawBatch* out) {
   JsonDocument doc;
   if (deserializeJson(doc, body, len)) return V_JSON;
   JsonArray arr = doc["msgArray"];
-  if (arr.isNull() || arr.size() != 5) return V_JSON;
+  if (arr.isNull()) return V_JSON;
   *out = RawBatch{};
-  int k = 0;
   for (JsonObject row : arr) {
     const char* c = row["c"] | "";
-    int j = -1;
-    for (int i = 0; i < 5; i++) {
-      if (strcmp(c, EXPECT_CODES[i]) == 0) {
-        j = i;
-        break;
-      }
-    }
-    if (j < 0) return V_STRUCT;
-    strncpy(out->rows[k].code, c, sizeof(out->rows[k].code) - 1);
-    strncpy(out->rows[k].name, row["n"] | "", sizeof(out->rows[k].name) - 1);
-    strncpy(out->rows[k].z, row["z"] | "-", sizeof(out->rows[k].z) - 1);
-    strncpy(out->rows[k].y, row["y"] | "-", sizeof(out->rows[k].y) - 1);
-    strncpy(out->rows[k].t, row["t"] | "", sizeof(out->rows[k].t) - 1);
-    strncpy(out->rows[k].d, row["d"] | "", sizeof(out->rows[k].d) - 1);
-    k++;
+    int idx = expectedIndex(c);
+    if (idx < 0) continue;
+    if (out->count[idx] < 2) ++out->count[idx];
+    if (out->count[idx] != 1) continue;
+    strncpy(out->rows[idx].code, c, sizeof(out->rows[idx].code) - 1);
+    out->rows[idx].code[sizeof(out->rows[idx].code) - 1] = '\0';
+    strncpy(out->rows[idx].name, row["n"] | "", sizeof(out->rows[idx].name) - 1);
+    out->rows[idx].name[sizeof(out->rows[idx].name) - 1] = '\0';
+    strncpy(out->rows[idx].z, row["z"] | "-", sizeof(out->rows[idx].z) - 1);
+    out->rows[idx].z[sizeof(out->rows[idx].z) - 1] = '\0';
+    strncpy(out->rows[idx].y, row["y"] | "-", sizeof(out->rows[idx].y) - 1);
+    out->rows[idx].y[sizeof(out->rows[idx].y) - 1] = '\0';
+    strncpy(out->rows[idx].t, row["t"] | "", sizeof(out->rows[idx].t) - 1);
+    out->rows[idx].t[sizeof(out->rows[idx].t) - 1] = '\0';
+    strncpy(out->rows[idx].d, row["d"] | "", sizeof(out->rows[idx].d) - 1);
+    out->rows[idx].d[sizeof(out->rows[idx].d) - 1] = '\0';
   }
   return V_OK;
 }
@@ -357,10 +387,17 @@ inline bool recordSane(const QuoteRecord& r) {
   if (!validDate(r.quoteDate) || !validTime(r.quoteTime)) return false;
   if (r.lastCloseDate[0] != '\0' && !validDate(r.lastCloseDate)) return false;
   for (int i = 0; i < 5; i++) {
-    if (strcmp(r.rows[i].code, EXPECT_CODES[i]) != 0) return false;
-    if (!std::isfinite(r.rows[i].z) || !std::isfinite(r.rows[i].y)) return false;
-    if (r.rows[i].y == 0.0) return false;
-    if (!validTime(r.rows[i].t)) return false;
+    if (strcmp(r.rows[i].code, WATCHLIST[i].code) != 0) return false;
+    if (r.rows[i].valid) {
+      if (!std::isfinite(r.rows[i].z) || !std::isfinite(r.rows[i].y)) return false;
+      if (r.rows[i].y == 0.0) return false;
+      if (!validTime(r.rows[i].t)) return false;
+    } else {
+      // 過渡 v1 blob 的無效列必須是 canonical invalid；index 不接受無效
+      if (i == 0) return false;
+      if (r.rows[i].z != 0.0 || r.rows[i].y != 0.0) return false;
+      if (r.rows[i].t[0] != '\0') return false;
+    }
   }
   return true;
 }
@@ -373,6 +410,7 @@ inline bool recordSane(const QuoteRecord& r) {
 inline bool recordDiffers(const QuoteRecord& a, const QuoteRecord& b) {
   for (int i = 0; i < 5; i++) {
     if (strcmp(a.rows[i].code, b.rows[i].code) != 0) return true;
+    if (a.rows[i].valid != b.rows[i].valid) return true;
     if (a.rows[i].z != b.rows[i].z) return true;
     if (a.rows[i].y != b.rows[i].y) return true;
     if (strcmp(a.rows[i].t, b.rows[i].t) != 0) return true;

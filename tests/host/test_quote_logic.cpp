@@ -4,6 +4,41 @@
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
+#include <string>
+
+static qlogic::RawBatch validRawBatch() {
+  qlogic::RawBatch raw = {};
+  const char* z[QUOTE_TOTAL] = {
+      "46331.45", "2420", "253", "106.95", "245.10",
+      "180.5", "132.0", "95.6", "21.4"};
+  const char* y[QUOTE_TOTAL] = {
+      "45975.22", "2410", "252", "106.05", "243.15",
+      "179.0", "131.5", "96.0", "21.1"};
+  for (int i = 0; i < QUOTE_TOTAL; ++i) {
+    raw.count[i] = 1;
+    strcpy(raw.rows[i].code, WATCHLIST[i].code);
+    strcpy(raw.rows[i].name, WATCHLIST[i].name);
+    strcpy(raw.rows[i].z, z[i]);
+    strcpy(raw.rows[i].y, y[i]);
+    strcpy(raw.rows[i].t, i == 0 ? "13:33:00" : "13:30:00");
+    strcpy(raw.rows[i].d, "20260903");
+  }
+  return raw;
+}
+
+static std::string jsonRows(std::initializer_list<const char*> codes) {
+  std::string body = "{\"msgArray\":[";
+  bool first = true;
+  for (const char* code : codes) {
+    if (!first) body += ',';
+    first = false;
+    body += "{\"c\":\"" + std::string(code) +
+            "\",\"n\":\"x\",\"z\":\"1\",\"y\":\"1\","
+            "\"t\":\"13:30:00\",\"d\":\"20260903\"}";
+  }
+  return body + "]}";
+}
 
 static void testParseNum() {
   double v = 0;
@@ -35,7 +70,11 @@ static void testParseJson() {
       "{\"c\":\"2330\",\"n\":\"台積電\",\"z\":\"2420.0000\",\"y\":\"2410.0000\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
       "{\"c\":\"2317\",\"n\":\"鴻海\",\"z\":\"253.0000\",\"y\":\"252.0000\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
       "{\"c\":\"0050\",\"n\":\"元大台灣50\",\"z\":\"106.9500\",\"y\":\"106.0500\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
-      "{\"c\":\"006208\",\"n\":\"富邦台50\",\"z\":\"245.1000\",\"y\":\"243.1500\",\"t\":\"13:30:00\",\"d\":\"20260828\"}]}";
+      "{\"c\":\"006208\",\"n\":\"富邦台50\",\"z\":\"245.1000\",\"y\":\"243.1500\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
+      "{\"c\":\"1513\",\"n\":\"中興電\",\"z\":\"180.5000\",\"y\":\"179.0000\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
+      "{\"c\":\"2412\",\"n\":\"中華電\",\"z\":\"132.0000\",\"y\":\"131.5000\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
+      "{\"c\":\"2881\",\"n\":\"富邦金\",\"z\":\"95.6000\",\"y\":\"96.0000\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
+      "{\"c\":\"2002\",\"n\":\"中鋼\",\"z\":\"21.4000\",\"y\":\"21.1000\",\"t\":\"13:30:00\",\"d\":\"20260828\"}]}";
   qlogic::RawBatch raw;
   assert(qlogic::parseJsonToRaw(FIX_OK, strlen(FIX_OK), &raw) == qlogic::V_OK);
   qlogic::MarketBatch out;
@@ -47,21 +86,23 @@ static void testParseJson() {
   // 無 msgArray
   static const char* FIX_NOARR = "{\"rtcode\":\"0000\"}";
   assert(qlogic::parseJsonToRaw(FIX_NOARR, strlen(FIX_NOARR), &raw) == qlogic::V_JSON);
-  // 列數不等於 5
+  // 列數不足不再是 JSON 錯誤：slot-based 收集接受任意列數，缺列由 count 反映
   static const char* FIX_4ROWS =
       "{\"msgArray\":[{\"c\":\"t00\",\"n\":\"x\",\"z\":\"1\",\"y\":\"1\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
       "{\"c\":\"2330\",\"n\":\"x\",\"z\":\"1\",\"y\":\"1\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
       "{\"c\":\"2317\",\"n\":\"x\",\"z\":\"1\",\"y\":\"1\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
       "{\"c\":\"0050\",\"n\":\"x\",\"z\":\"1\",\"y\":\"1\",\"t\":\"13:30:00\",\"d\":\"20260828\"}]}";
-  assert(qlogic::parseJsonToRaw(FIX_4ROWS, strlen(FIX_4ROWS), &raw) == qlogic::V_JSON);
-  // 未知代碼
+  assert(qlogic::parseJsonToRaw(FIX_4ROWS, strlen(FIX_4ROWS), &raw) == qlogic::V_OK);
+  assert(raw.count[0] == 1 && raw.count[4] == 0);
+  // 未知代碼直接忽略，不使整批失敗
   static const char* FIX_UNK =
       "{\"msgArray\":[{\"c\":\"t00\",\"n\":\"x\",\"z\":\"1\",\"y\":\"1\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
       "{\"c\":\"2330\",\"n\":\"x\",\"z\":\"1\",\"y\":\"1\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
       "{\"c\":\"2317\",\"n\":\"x\",\"z\":\"1\",\"y\":\"1\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
       "{\"c\":\"0050\",\"n\":\"x\",\"z\":\"1\",\"y\":\"1\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
       "{\"c\":\"9999\",\"n\":\"x\",\"z\":\"1\",\"y\":\"1\",\"t\":\"13:30:00\",\"d\":\"20260828\"}]}";
-  assert(qlogic::parseJsonToRaw(FIX_UNK, strlen(FIX_UNK), &raw) == qlogic::V_STRUCT);
+  assert(qlogic::parseJsonToRaw(FIX_UNK, strlen(FIX_UNK), &raw) == qlogic::V_OK);
+  assert(raw.count[0] == 1);
   printf("parseJson ok\n");
 }
 
@@ -71,14 +112,18 @@ static void testParseJsonTruncation() {
   char name[3 * 40 + 1];
   name[0] = '\0';
   for (int i = 0; i < 40; i++) strcat(name, "名");
-  char fix[1024];
+  char fix[2048];
   snprintf(fix, sizeof fix,
            "{\"msgArray\":["
            "{\"c\":\"t00\",\"n\":\"%s\",\"z\":\"46331.45\",\"y\":\"45975.22\",\"t\":\"13:33:00\",\"d\":\"20260828\"},"
            "{\"c\":\"2330\",\"n\":\"台積電\",\"z\":\"2420.0000\",\"y\":\"2410.0000\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
            "{\"c\":\"2317\",\"n\":\"鴻海\",\"z\":\"253.0000\",\"y\":\"252.0000\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
            "{\"c\":\"0050\",\"n\":\"元大台灣50\",\"z\":\"106.9500\",\"y\":\"106.0500\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
-           "{\"c\":\"006208\",\"n\":\"富邦台50\",\"z\":\"245.1000\",\"y\":\"243.1500\",\"t\":\"13:30:00\",\"d\":\"20260828\"}]}",
+           "{\"c\":\"006208\",\"n\":\"富邦台50\",\"z\":\"245.1000\",\"y\":\"243.1500\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
+           "{\"c\":\"1513\",\"n\":\"中興電\",\"z\":\"180.5000\",\"y\":\"179.0000\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
+           "{\"c\":\"2412\",\"n\":\"中華電\",\"z\":\"132.0000\",\"y\":\"131.5000\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
+           "{\"c\":\"2881\",\"n\":\"富邦金\",\"z\":\"95.6000\",\"y\":\"96.0000\",\"t\":\"13:30:00\",\"d\":\"20260828\"},"
+           "{\"c\":\"2002\",\"n\":\"中鋼\",\"z\":\"21.4000\",\"y\":\"21.1000\",\"t\":\"13:30:00\",\"d\":\"20260828\"}]}",
            name);
   qlogic::RawBatch raw;
   assert(qlogic::parseJsonToRaw(fix, strlen(fix), &raw) == qlogic::V_OK);
@@ -88,34 +133,24 @@ static void testParseJsonTruncation() {
 }
 
 static void testValidateBatch() {
-  qlogic::RawBatch raw = {};
-  const char* codes[5] = {"t00", "2330", "2317", "0050", "006208"};
-  const char* z[5] = {"46331.45", "2420.0000", "253.0000", "106.9500", "245.1000"};
-  const char* y[5] = {"45975.22", "2410.0000", "252.0000", "106.0500", "243.1500"};
-  const char* t[5] = {"13:33:00", "13:30:00", "13:30:00", "13:30:00", "13:30:00"};
-  for (int i = 0; i < 5; i++) {
-    strcpy(raw.rows[i].code, codes[i]);
-    strcpy(raw.rows[i].name, "x");
-    strcpy(raw.rows[i].z, z[i]);
-    strcpy(raw.rows[i].y, y[i]);
-    strcpy(raw.rows[i].t, t[i]);
-    strcpy(raw.rows[i].d, "20260828");
-  }
+  auto raw = validRawBatch();
+  // validRawBatch 用 20260903；此舊測試沿用同一份資料，僅改日期斷言
+  for (int i = 0; i < QUOTE_TOTAL; ++i) strcpy(raw.rows[i].d, "20260828");
   qlogic::MarketBatch out;
   assert(qlogic::validateBatch(raw, &out) == qlogic::V_OK);
   assert(strcmp(out.date, "20260828") == 0);
   assert(strcmp(out.quoteTime, "13:33:00") == 0);
   assert(out.rows[0].z == 46331.45 && out.rows[0].y == 45975.22);
+  assert(out.rows[0].valid);
 
-  // 缺列（漏掉 006208）
-  qlogic::RawBatch miss = raw;
-  miss.rows[4].code[0] = '\0';
-  assert(qlogic::validateBatch(miss, &out) == qlogic::V_STRUCT);
+  // index 缺列／重複 → 整批 V_STRUCT（count 語意）
+  qlogic::RawBatch missIdx = raw;
+  missIdx.count[0] = 0;
+  assert(qlogic::validateBatch(missIdx, &out) == qlogic::V_STRUCT);
 
-  // 重複代碼
-  qlogic::RawBatch dup = raw;
-  strcpy(dup.rows[4].code, "2330");
-  assert(qlogic::validateBatch(dup, &out) == qlogic::V_STRUCT);
+  qlogic::RawBatch dupIdx = raw;
+  dupIdx.count[0] = 2;
+  assert(qlogic::validateBatch(dupIdx, &out) == qlogic::V_STRUCT);
 
   // z 為 "-"（盤中未成交，spec 修訂七版）：該列記 z=0，整批仍有效
   qlogic::RawBatch dash = raw;
@@ -124,45 +159,76 @@ static void testValidateBatch() {
   assert(dash.rows[2].z[0] == '-');  // raw 不被改寫
   qlogic::MarketBatch dashOut;
   assert(qlogic::validateBatch(dash, &dashOut) == qlogic::V_OK);
-  assert(dashOut.rows[2].z == 0.0);
-  assert(dashOut.rows[2].y == 252.0000);  // y 欄不受影響
+  assert(dashOut.rows[2].valid && dashOut.rows[2].z == 0.0);
+  assert(dashOut.rows[2].y == 252.0);  // y 欄不受影響
 
-  // y 為 "-" 仍拒絕（修訂七版只放寬 z）
+  // 個股 y 為 "-" 降級為無效列，不再整批 V_NUMERIC
   qlogic::RawBatch ydash = raw;
   strcpy(ydash.rows[2].y, "-");
-  assert(qlogic::validateBatch(ydash, &out) == qlogic::V_NUMERIC);
+  qlogic::MarketBatch yOut;
+  assert(qlogic::validateBatch(ydash, &yOut) == qlogic::V_OK);
+  assert(!yOut.rows[2].valid);
+  assert(yOut.rows[2].z == 0 && yOut.rows[2].y == 0);
+  // index y 為 "-" 仍整批 V_NUMERIC
+  qlogic::RawBatch idxYdash = raw;
+  strcpy(idxYdash.rows[0].y, "-");
+  assert(qlogic::validateBatch(idxYdash, &out) == qlogic::V_NUMERIC);
 
-  // 全部五列都未成交：整批仍有效（開盤瞬間的合法狀態）
+  // 全部九列都未成交：整批仍有效（開盤瞬間的合法狀態）
   qlogic::RawBatch allDash = raw;
-  for (int i = 0; i < 5; i++) strcpy(allDash.rows[i].z, "-");
+  for (int i = 0; i < QUOTE_TOTAL; i++) strcpy(allDash.rows[i].z, "-");
   qlogic::MarketBatch allDashOut;
   assert(qlogic::validateBatch(allDash, &allDashOut) == qlogic::V_OK);
-  for (int i = 0; i < 5; i++) assert(allDashOut.rows[i].z == 0.0);
+  for (int i = 0; i < QUOTE_TOTAL; i++) {
+    assert(allDashOut.rows[i].valid && allDashOut.rows[i].z == 0.0);
+  }
 
-  // z 為空字串仍拒絕（只有 "-" 有未成交語意）
+  // 個股 z 為空字串降級；index z 空仍 V_NUMERIC
   qlogic::RawBatch emptyZ = raw;
   strcpy(emptyZ.rows[2].z, "");
-  assert(qlogic::validateBatch(emptyZ, &out) == qlogic::V_NUMERIC);
+  qlogic::MarketBatch emptyOut;
+  assert(qlogic::validateBatch(emptyZ, &emptyOut) == qlogic::V_OK);
+  assert(!emptyOut.rows[2].valid);
+  qlogic::RawBatch idxEmptyZ = raw;
+  strcpy(idxEmptyZ.rows[0].z, "");
+  assert(qlogic::validateBatch(idxEmptyZ, &out) == qlogic::V_NUMERIC);
 
-  // y == 0
+  // 個股 y == 0 降級；index y == 0 仍 V_NUMERIC
   qlogic::RawBatch zero = raw;
-  strcpy(zero.rows[1].y, "0.0000");
-  assert(qlogic::validateBatch(zero, &out) == qlogic::V_NUMERIC);
+  strcpy(zero.rows[1].y, "0");
+  qlogic::MarketBatch zeroOut;
+  assert(qlogic::validateBatch(zero, &zeroOut) == qlogic::V_OK);
+  assert(!zeroOut.rows[1].valid);
+  qlogic::RawBatch idxZero = raw;
+  strcpy(idxZero.rows[0].y, "0");
+  assert(qlogic::validateBatch(idxZero, &out) == qlogic::V_NUMERIC);
 
-  // d 格式錯誤
+  // 個股 d 格式錯誤降級；index d 錯仍 V_FORMAT
   qlogic::RawBatch badd = raw;
   strcpy(badd.rows[3].d, "2026-8-2");
-  assert(qlogic::validateBatch(badd, &out) == qlogic::V_FORMAT);
+  qlogic::MarketBatch badDOut;
+  assert(qlogic::validateBatch(badd, &badDOut) == qlogic::V_OK);
+  assert(!badDOut.rows[3].valid);
+  qlogic::RawBatch idxBadD = raw;
+  strcpy(idxBadD.rows[0].d, "2026-8-2");
+  assert(qlogic::validateBatch(idxBadD, &out) == qlogic::V_FORMAT);
 
-  // t 格式錯誤
+  // 個股 t 格式錯誤降級；index t 錯仍 V_FORMAT
   qlogic::RawBatch badt = raw;
   strcpy(badt.rows[3].t, "9:30:00");
-  assert(qlogic::validateBatch(badt, &out) == qlogic::V_FORMAT);
+  qlogic::MarketBatch badTOut;
+  assert(qlogic::validateBatch(badt, &badTOut) == qlogic::V_OK);
+  assert(!badTOut.rows[3].valid);
+  qlogic::RawBatch idxBadT = raw;
+  strcpy(idxBadT.rows[0].t, "9:30:00");
+  assert(qlogic::validateBatch(idxBadT, &out) == qlogic::V_FORMAT);
 
-  // 五列 d 不一致
+  // 個股 d 與指數不同降級，不再整批 V_DATE_DIFF
   qlogic::RawBatch mixd = raw;
   strcpy(mixd.rows[2].d, "20260827");
-  assert(qlogic::validateBatch(mixd, &out) == qlogic::V_DATE_DIFF);
+  qlogic::MarketBatch mixOut;
+  assert(qlogic::validateBatch(mixd, &mixOut) == qlogic::V_OK);
+  assert(!mixOut.rows[2].valid);
 
   printf("validateBatch ok\n");
 }
@@ -265,7 +331,8 @@ static void testBlob() {
   qlogic::QuoteRecord a = {};
   a.version = qlogic::BLOB_VERSION;
   for (int i = 0; i < 5; i++) {
-    strcpy(a.rows[i].code, qlogic::EXPECT_CODES[i]);
+    strcpy(a.rows[i].code, WATCHLIST[i].code);
+    a.rows[i].valid = true;
     a.rows[i].z = 10.0 + i;
     a.rows[i].y = 9.0 + i;
     strcpy(a.rows[i].t, "13:30:00");
@@ -286,6 +353,8 @@ static void testBlob() {
   assert(!qlogic::recordDiffers(a, b));      // 僅時間變更不寫（spec 修訂四）
   b = a; b.savedEpoch++;
   assert(!qlogic::recordDiffers(a, b));      // 僅 savedEpoch 不寫
+  b = a; b.rows[2].valid = false; b.rows[2].z = 0; b.rows[2].y = 0; b.rows[2].t[0] = '\0';
+  assert(qlogic::recordDiffers(a, b));       // valid 變更觸發寫入
 
   assert(qlogic::recordSane(a));
   b = a; b.version = 2;
@@ -293,6 +362,15 @@ static void testBlob() {
   b = a; b.rows[3].y = 0.0;
   assert(!qlogic::recordSane(b));
   b = a; strcpy(b.quoteDate, "2026-8-28");
+  assert(!qlogic::recordSane(b));
+  // 個股 canonical invalid 可接受
+  b = a; b.rows[3].valid = false; b.rows[3].z = 0; b.rows[3].y = 0; b.rows[3].t[0] = '\0';
+  assert(qlogic::recordSane(b));
+  // 個股非 canonical invalid（保留舊價）拒絕
+  b = a; b.rows[3].valid = false;
+  assert(!qlogic::recordSane(b));
+  // index 不接受無效
+  b = a; b.rows[0].valid = false; b.rows[0].z = 0; b.rows[0].y = 0; b.rows[0].t[0] = '\0';
   assert(!qlogic::recordSane(b));
 
   // 序列化 roundtrip（putBytes 語意）
@@ -338,6 +416,120 @@ static void testWatchlistAndExCh() {
   printf("watchlist/ex_ch ok\n");
 }
 
+static void testNineRowValidation() {
+  qlogic::MarketBatch out;
+  auto raw = validRawBatch();
+  assert(qlogic::validateBatch(raw, &out) == qlogic::V_OK);
+  assert(out.rows[0].valid && out.rows[8].valid);
+  assert(strcmp(out.date, "20260903") == 0);
+  assert(strcmp(out.quoteTime, "13:33:00") == 0);
+
+  auto missingIndex = raw;
+  missingIndex.count[0] = 0;
+  assert(qlogic::validateBatch(missingIndex, &out) == qlogic::V_STRUCT);
+
+  auto duplicateIndex = raw;
+  duplicateIndex.count[0] = 2;
+  assert(qlogic::validateBatch(duplicateIndex, &out) == qlogic::V_STRUCT);
+
+  auto badStock = raw;
+  strcpy(badStock.rows[6].y, "-");
+  assert(qlogic::validateBatch(badStock, &out) == qlogic::V_OK);
+  assert(!out.rows[6].valid);
+  assert(out.rows[6].z == 0 && out.rows[6].y == 0);
+  assert(out.rows[6].t[0] == '\0');
+
+  auto stockDash = raw;
+  strcpy(stockDash.rows[5].z, "-");
+  assert(qlogic::validateBatch(stockDash, &out) == qlogic::V_OK);
+  assert(out.rows[5].valid && out.rows[5].z == 0);
+
+  auto badDate = raw;
+  strcpy(badDate.rows[7].d, "20260902");
+  assert(qlogic::validateBatch(badDate, &out) == qlogic::V_OK);
+  assert(!out.rows[7].valid);
+
+  auto newerInvalid = raw;
+  strcpy(newerInvalid.rows[8].t, "13:34:00");
+  strcpy(newerInvalid.rows[8].name, "");
+  assert(qlogic::validateBatch(newerInvalid, &out) == qlogic::V_OK);
+  assert(strcmp(out.quoteTime, "13:33:00") == 0);
+
+  auto assertOnlyStockInvalid = [&](qlogic::RawBatch candidate, int bad) {
+    qlogic::MarketBatch checked;
+    assert(qlogic::validateBatch(candidate, &checked) == qlogic::V_OK);
+    for (int i = 0; i < QUOTE_TOTAL; ++i) assert(checked.rows[i].valid == (i != bad));
+    assert(strcmp(checked.rows[bad].code, WATCHLIST[bad].code) == 0);
+    assert(checked.rows[bad].z == 0 && checked.rows[bad].y == 0);
+    assert(checked.rows[bad].t[0] == '\0');
+  };
+
+  auto missing = raw; missing.count[5] = 0; assertOnlyStockInvalid(missing, 5);
+  auto duplicate = raw; duplicate.count[5] = 2; assertOnlyStockInvalid(duplicate, 5);
+  auto noName = raw; noName.rows[5].name[0] = '\0'; assertOnlyStockInvalid(noName, 5);
+  auto badZ = raw; strcpy(badZ.rows[5].z, "bad"); assertOnlyStockInvalid(badZ, 5);
+  auto badTime = raw; strcpy(badTime.rows[5].t, "9:30"); assertOnlyStockInvalid(badTime, 5);
+  auto otherDate = raw; strcpy(otherDate.rows[5].d, "20260902");
+  assertOnlyStockInvalid(otherDate, 5);
+
+  auto indexNumeric = raw; strcpy(indexNumeric.rows[0].y, "-");
+  assert(qlogic::validateBatch(indexNumeric, &out) == qlogic::V_NUMERIC);
+  auto indexFormat = raw; indexFormat.rows[0].name[0] = '\0';
+  assert(qlogic::validateBatch(indexFormat, &out) == qlogic::V_FORMAT);
+  auto indexMissing = raw; indexMissing.count[0] = 0;
+  assert(qlogic::validateBatch(indexMissing, &out) == qlogic::V_STRUCT);
+  auto indexDuplicate = raw; indexDuplicate.count[0] = 2;
+  assert(qlogic::validateBatch(indexDuplicate, &out) == qlogic::V_STRUCT);
+  printf("nine-row validation ok\n");
+}
+
+static void testNineRowJsonCollection() {
+  qlogic::MarketBatch out;
+  const char* all[] = {"t00","2330","2317","0050","006208",
+                       "1513","2412","2881","2002"};
+  std::string complete = jsonRows({all[0],all[1],all[2],all[3],all[4],
+                                   all[5],all[6],all[7],all[8]});
+  qlogic::RawBatch collected = {};
+  assert(qlogic::parseJsonToRaw(complete.c_str(), complete.size(), &collected) == qlogic::V_OK);
+  for (int i = 0; i < QUOTE_TOTAL; ++i) assert(collected.count[i] == 1);
+
+  std::string unknown = jsonRows({all[0],all[1],all[2],all[3],all[4],
+                                  all[5],all[6],all[7],all[8],"9999"});
+  assert(qlogic::parseJsonToRaw(unknown.c_str(), unknown.size(), &collected) == qlogic::V_OK);
+  for (int i = 0; i < QUOTE_TOTAL; ++i) assert(collected.count[i] == 1);
+
+  std::string missingStock = jsonRows({all[0],all[1],all[2],all[3],all[4],
+                                       all[5],all[7],all[8]});
+  assert(qlogic::parseJsonToRaw(missingStock.c_str(), missingStock.size(), &collected) == qlogic::V_OK);
+  assert(collected.count[6] == 0);
+
+  std::string duplicateStock = jsonRows({all[0],all[1],all[2],all[3],all[4],
+                                         all[5],all[6],all[6],all[7],all[8]});
+  assert(qlogic::parseJsonToRaw(duplicateStock.c_str(), duplicateStock.size(), &collected) == qlogic::V_OK);
+  assert(collected.count[6] == 2);
+
+  std::string missingIndex = jsonRows({all[1],all[2],all[3],all[4],all[5],all[6],all[7],all[8]});
+  assert(qlogic::parseJsonToRaw(missingIndex.c_str(), missingIndex.size(), &collected) == qlogic::V_OK);
+  assert(qlogic::validateBatch(collected, &out) == qlogic::V_STRUCT);
+  std::string duplicateIndex = jsonRows({all[0],all[0],all[1],all[2],all[3],all[4],
+                                         all[5],all[6],all[7],all[8]});
+  assert(qlogic::parseJsonToRaw(duplicateIndex.c_str(), duplicateIndex.size(), &collected) == qlogic::V_OK);
+  assert(qlogic::validateBatch(collected, &out) == qlogic::V_STRUCT);
+
+  std::string many = "{\"msgArray\":[";
+  for (int i = 0; i < 300; ++i) {
+    if (i) many += ',';
+    many += "{\"c\":\"t00\",\"n\":\"x\",\"z\":\"1\",\"y\":\"1\",";
+    many += "\"t\":\"13:30:00\",\"d\":\"20260903\"}";
+  }
+  many += "]}";
+  qlogic::RawBatch repeated = {};
+  assert(qlogic::parseJsonToRaw(many.c_str(), many.size(), &repeated) == qlogic::V_OK);
+  assert(repeated.count[0] == 2);
+  assert(qlogic::validateBatch(repeated, &out) == qlogic::V_STRUCT);
+  printf("nine-row json ok\n");
+}
+
 int main() {
   testWatchlistAndExCh();
   testParseNum();
@@ -345,6 +537,8 @@ int main() {
   testParseJson();
   testParseJsonTruncation();
   testValidateBatch();
+  testNineRowValidation();
+  testNineRowJsonCollection();
   testCalc();
   testFormatPrice();
   testCivil();
