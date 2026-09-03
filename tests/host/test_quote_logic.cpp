@@ -2,10 +2,13 @@
 #include "quote_logic.h"
 #include "watchlist.h"
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
 #include <string>
+#include <type_traits>
 
 static qlogic::RawBatch validRawBatch() {
   qlogic::RawBatch raw = {};
@@ -328,9 +331,25 @@ static void testSchedule() {
 }
 
 static void testBlob() {
+  static_assert(qlogic::BLOB_VERSION == 2);
+  static_assert(std::is_standard_layout_v<qlogic::QuoteRow>);
+  static_assert(std::is_standard_layout_v<qlogic::QuoteRecord>);
+  static_assert(sizeof(qlogic::QuoteRow) == 48);
+  static_assert(alignof(qlogic::QuoteRow) == 8);
+  static_assert(offsetof(qlogic::QuoteRow, code) == 0);
+  static_assert(offsetof(qlogic::QuoteRow, valid) == 12);
+  static_assert(offsetof(qlogic::QuoteRow, z) == 16);
+  static_assert(offsetof(qlogic::QuoteRow, y) == 24);
+  static_assert(offsetof(qlogic::QuoteRow, t) == 32);
+  static_assert(sizeof(qlogic::QuoteRecord) == 472);
+  static_assert(offsetof(qlogic::QuoteRecord, rows) == 8);
+  static_assert(offsetof(qlogic::QuoteRecord, quoteDate) == 440);
+  static_assert(offsetof(qlogic::QuoteRecord, quoteTime) == 449);
+  static_assert(offsetof(qlogic::QuoteRecord, lastCloseDate) == 458);
+  static_assert(offsetof(qlogic::QuoteRecord, savedEpoch) == 468);
   qlogic::QuoteRecord a = {};
   a.version = qlogic::BLOB_VERSION;
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < QUOTE_TOTAL; i++) {
     strcpy(a.rows[i].code, WATCHLIST[i].code);
     a.rows[i].valid = true;
     a.rows[i].z = 10.0 + i;
@@ -357,7 +376,7 @@ static void testBlob() {
   assert(qlogic::recordDiffers(a, b));       // valid 變更觸發寫入
 
   assert(qlogic::recordSane(a));
-  b = a; b.version = 2;
+  b = a; b.version = qlogic::BLOB_VERSION + 1;
   assert(!qlogic::recordSane(b));
   b = a; b.rows[3].y = 0.0;
   assert(!qlogic::recordSane(b));
@@ -379,7 +398,46 @@ static void testBlob() {
   qlogic::QuoteRecord c;
   memcpy(&c, bytes, sizeof c);
   assert(memcmp(&a, &c, sizeof a) == 0);
-  printf("blob ok\n");
+  printf("blob v2 ok\n");
+}
+
+static void testPageRtc() {
+  assert(qlogic::quoteIndexForPageRow(0, 0) == 0);
+  assert(qlogic::quoteIndexForPageRow(0, 4) == 4);
+  assert(qlogic::quoteIndexForPageRow(1, 0) == 0);
+  assert(qlogic::quoteIndexForPageRow(1, 1) == 5);
+  assert(qlogic::quoteIndexForPageRow(1, 4) == 8);
+  assert(qlogic::quoteIndexForPageRow(2, 1) == -1);
+  assert(qlogic::quoteIndexForPageRow(0, 5) == -1);
+  assert(qlogic::changedPage(0, qlogic::WakeAction::PrevPage) == 1);
+  assert(qlogic::changedPage(1, qlogic::WakeAction::NextPage) == 0);
+  assert(qlogic::chooseWakeAction(true, true, false) == qlogic::WakeAction::Menu);
+  assert(qlogic::chooseWakeAction(false, true, true) == qlogic::WakeAction::None);
+
+  qlogic::QuoteRtcState rtc{1, 1234};
+  qlogic::normalizeRtcState(&rtc, false);
+  assert(rtc.pageIndex == 0 && rtc.targetEpoch == 0);
+  rtc = {9, 1234};
+  qlogic::normalizeRtcState(&rtc, true);
+  assert(rtc.pageIndex == 0 && rtc.targetEpoch == 1234);
+
+  const uint32_t now = 1000000;
+  assert(qlogic::resumeTarget(now, now + 20) == now + 20);
+  assert(qlogic::resumeTarget(now, now) == now + 1);
+  assert(qlogic::resumeTarget(now, now - 1) == now + 1);
+  assert(qlogic::resumeTarget(now, 0) == now + 300);
+  assert(qlogic::resumeTarget(now, now + 7 * 86400 + 1) == now + 300);
+  assert(qlogic::resumeTarget(now, now - 7 * 86400 - 1) == now + 300);
+  assert(qlogic::noCacheRetryTarget(now, now + 1000) == now + 300);
+  assert(qlogic::noCacheRetryTarget(now, now + 20) == now + 20);
+  // nineOhFive 代表 09:04:40→09:05:00 的 20 秒差：翻頁不得跳過下一個 5 分邊界
+  uint32_t nineOhFive = 1000020;
+  assert(qlogic::resumeTarget(1000000, nineOhFive) == nineOhFive);
+  uint32_t retry = qlogic::noCacheRetryTarget(1000000, 1002000);
+  assert(retry == 1000300);
+  // 第二次翻頁不得把 retry deadline 往後滑動
+  assert(qlogic::noCacheRetryTarget(1000100, retry) == 1000300);
+  printf("page/rtc ok\n");
 }
 
 static void testWatchlistAndExCh() {
@@ -545,6 +603,7 @@ int main() {
   testFormatDateInvalid();
   testSchedule();
   testBlob();
+  testPageRtc();
   printf("ALL PASS\n");
   return 0;
 }

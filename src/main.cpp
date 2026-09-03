@@ -45,7 +45,7 @@ static void viewFromBatch(QuoteView* v, const qlogic::MarketBatch& mb,
                           const char* timeStr, const char* status) {
   qlogic::QuoteRecord rec = {};
   rec.version = qlogic::BLOB_VERSION;
-  for (int i = 0; i < WATCH_N; i++) rec.rows[i] = mb.rows[i];
+  for (int i = 0; i < QUOTE_TOTAL; i++) rec.rows[i] = mb.rows[i];
   strcpy(rec.quoteDate, mb.date);
   strcpy(rec.quoteTime, mb.quoteTime);
   viewFromRecord(v, rec, timeStr, status);
@@ -83,7 +83,7 @@ static FetchResult fetchUpdate(uint32_t nowUtc, const char* todayStr) {
   bool have = quoteRecordLoad(&old);
   qlogic::QuoteRecord rec = {};
   rec.version = qlogic::BLOB_VERSION;
-  for (int i = 0; i < WATCH_N; i++) rec.rows[i] = fr.mb.rows[i];
+  for (int i = 0; i < QUOTE_TOTAL; i++) rec.rows[i] = fr.mb.rows[i];
   strcpy(rec.quoteDate, fr.mb.date);
   strcpy(rec.quoteTime, fr.mb.quoteTime);
   if (have && strcmp(old.lastCloseDate, rec.quoteDate) == 0) {
@@ -105,7 +105,7 @@ static void finalizeClose(const qlogic::MarketBatch& mb, const char* today,
   bool have = quoteRecordLoad(&old);
   qlogic::QuoteRecord rec = {};
   rec.version = qlogic::BLOB_VERSION;
-  for (int i = 0; i < WATCH_N; i++) rec.rows[i] = mb.rows[i];
+  for (int i = 0; i < QUOTE_TOTAL; i++) rec.rows[i] = mb.rows[i];
   strcpy(rec.quoteDate, mb.date);
   strcpy(rec.quoteTime, mb.quoteTime);
   strcpy(rec.lastCloseDate, today);

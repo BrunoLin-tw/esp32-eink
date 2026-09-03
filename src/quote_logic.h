@@ -5,10 +5,12 @@
 #include <ArduinoJson.h>
 #include "watchlist.h"
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <type_traits>
 
 namespace qlogic {
 
@@ -19,7 +21,7 @@ enum {
   V_STRUCT = -1,    // 缺列/重複/代碼不符
   V_NUMERIC = -2,   // z/y 非有限數字或 y==0
   V_FORMAT = -3,    // d/t/n 格式錯誤
-  V_DATE_DIFF = -4, // 五列 d 不一致
+  V_DATE_DIFF = -4, // 九列容錯（不再回傳，保留相容）
   V_JSON = -5,      // JSON 結構無效
 };
 
@@ -52,6 +54,7 @@ struct MarketBatch {
 };
 
 inline int expectedIndex(const char* code) {
+  if (code == nullptr) return -1;
   for (int i = 0; i < QUOTE_TOTAL; ++i)
     if (strcmp(code, WATCHLIST[i].code) == 0) return i;
   return -1;
@@ -134,13 +137,15 @@ inline bool convertRow(const RawQuote& raw, QuoteRow* out) {
   out->valid = true;
   out->z = z;
   out->y = y;
-  strcpy(out->t, raw.t);
+  strncpy(out->t, raw.t, sizeof(out->t) - 1);
+  out->t[sizeof(out->t) - 1] = '\0';
   return true;
 }
 
 inline void invalidateRow(QuoteRow* row, const char* code) {
   *row = QuoteRow{};
   strncpy(row->code, code, sizeof(row->code) - 1);
+  row->code[sizeof(row->code) - 1] = '\0';
 }
 
 inline int validateRequiredRow(const RawQuote& raw, QuoteRow* out) {
@@ -158,11 +163,13 @@ inline int validateRequiredRow(const RawQuote& raw, QuoteRow* out) {
   out->valid = true;
   out->z = z;
   out->y = y;
-  strcpy(out->t, raw.t);
+  strncpy(out->t, raw.t, sizeof(out->t) - 1);
+  out->t[sizeof(out->t) - 1] = '\0';
   return V_OK;
 }
 
 // 非 V_OK 時 *out 內容不可用（可能部分寫入）
+// 前提：輸入 slots 為 producer-ordered（parseJsonToRaw 輸出），以 WATCHLIST 索引對齊
 // 順序固定：(1) count[0]!=1 → V_STRUCT；(2) index 欄位錯 → V_NUMERIC/V_FORMAT；
 // (3) date 取 index d；(4) 個股逐列降級；(5) quoteTime 取有效列最大
 inline int validateBatch(const RawBatch& in, MarketBatch* out) {
@@ -367,26 +374,39 @@ inline uint32_t capSleep(uint32_t now, uint32_t target) {
 }
 
 // ---- NVS blob（單一 versioned record，spec 修訂四版）----
-static const uint32_t BLOB_VERSION = 1;
+static constexpr uint32_t BLOB_VERSION = 2;
 
 struct QuoteRecord {
   uint32_t version;
-  QuoteRow rows[5];
+  QuoteRow rows[QUOTE_TOTAL];
   char quoteDate[9];      // 快取交易日（YYYYMMDD）
-  char quoteTime[9];      // 5 列最新有效 t
+  char quoteTime[9];      // QUOTE_TOTAL 列最新有效 t
   char lastCloseDate[9];  // 收盤定格旗標（""=未定格）
   uint32_t savedEpoch;    // 最後持久化時間（UTC）
 };
 
 // blob layout 防漂移：欄位變動時這裡會編譯失敗，須同步遞增 BLOB_VERSION
+static_assert(std::is_standard_layout<QuoteRow>::value, "QuoteRow must be standard-layout");
+static_assert(std::is_standard_layout<QuoteRecord>::value, "QuoteRecord must be standard-layout");
 static_assert(sizeof(QuoteRow) == 48, "QuoteRow layout changed; bump BLOB_VERSION");
-static_assert(sizeof(QuoteRecord) == 280, "QuoteRecord layout changed; bump BLOB_VERSION");
+static_assert(alignof(QuoteRow) == 8, "QuoteRow layout changed; bump BLOB_VERSION");
+static_assert(offsetof(QuoteRow, code) == 0, "QuoteRow layout changed; bump BLOB_VERSION");
+static_assert(offsetof(QuoteRow, valid) == 12, "QuoteRow layout changed; bump BLOB_VERSION");
+static_assert(offsetof(QuoteRow, z) == 16, "QuoteRow layout changed; bump BLOB_VERSION");
+static_assert(offsetof(QuoteRow, y) == 24, "QuoteRow layout changed; bump BLOB_VERSION");
+static_assert(offsetof(QuoteRow, t) == 32, "QuoteRow layout changed; bump BLOB_VERSION");
+static_assert(sizeof(QuoteRecord) == 472, "QuoteRecord layout changed; bump BLOB_VERSION");
+static_assert(offsetof(QuoteRecord, rows) == 8, "QuoteRecord layout changed; bump BLOB_VERSION");
+static_assert(offsetof(QuoteRecord, quoteDate) == 440, "QuoteRecord layout changed; bump BLOB_VERSION");
+static_assert(offsetof(QuoteRecord, quoteTime) == 449, "QuoteRecord layout changed; bump BLOB_VERSION");
+static_assert(offsetof(QuoteRecord, lastCloseDate) == 458, "QuoteRecord layout changed; bump BLOB_VERSION");
+static_assert(offsetof(QuoteRecord, savedEpoch) == 468, "QuoteRecord layout changed; bump BLOB_VERSION");
 
 inline bool recordSane(const QuoteRecord& r) {
   if (r.version != BLOB_VERSION) return false;
   if (!validDate(r.quoteDate) || !validTime(r.quoteTime)) return false;
   if (r.lastCloseDate[0] != '\0' && !validDate(r.lastCloseDate)) return false;
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < QUOTE_TOTAL; i++) {
     if (strcmp(r.rows[i].code, WATCHLIST[i].code) != 0) return false;
     if (r.rows[i].valid) {
       if (!std::isfinite(r.rows[i].z) || !std::isfinite(r.rows[i].y)) return false;
@@ -408,7 +428,7 @@ inline bool recordSane(const QuoteRecord& r) {
 // （兩側 doubles 皆由同一來源字串解析，== 比較成立）
 // putBytes 二進位儲存保留；layout 變動時 BLOB_VERSION 必須遞增
 inline bool recordDiffers(const QuoteRecord& a, const QuoteRecord& b) {
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < QUOTE_TOTAL; i++) {
     if (strcmp(a.rows[i].code, b.rows[i].code) != 0) return true;
     if (a.rows[i].valid != b.rows[i].valid) return true;
     if (a.rows[i].z != b.rows[i].z) return true;
@@ -418,6 +438,69 @@ inline bool recordDiffers(const QuoteRecord& a, const QuoteRecord& b) {
   if (strncmp(a.quoteDate, b.quoteDate, 9) != 0) return true;
   if (strncmp(a.lastCloseDate, b.lastCloseDate, 9) != 0) return true;
   return false;
+}
+
+// ---- 分頁、按鍵與 RTC（純邏輯，不依賴 ESP-IDF header）----
+enum class WakeAction { None, Menu, PrevPage, NextPage };
+
+struct QuoteRtcState {
+  uint8_t pageIndex;
+  uint32_t targetEpoch;
+};
+
+// 頁面切片：row 0 固定為指數（index 0）；其餘 row 對應同頁個股；非法回 -1
+inline int quoteIndexForPageRow(uint8_t pageIndex, int rowIndex) {
+  if (pageIndex >= PAGE_COUNT) return -1;
+  if (rowIndex < 0 || rowIndex >= PAGE_ROWS) return -1;
+  if (rowIndex == 0) return 0;
+  return static_cast<int>(pageIndex) * STOCKS_PER_PAGE + rowIndex;
+}
+
+// PrevPage/NextPage 在 2 頁間迴繞（0↔1）；None/Menu 保持原頁
+inline uint8_t changedPage(uint8_t pageIndex, WakeAction action) {
+  if (pageIndex >= PAGE_COUNT) return 0;
+  if (action == WakeAction::PrevPage)
+    return static_cast<uint8_t>((pageIndex + PAGE_COUNT - 1) % PAGE_COUNT);
+  if (action == WakeAction::NextPage)
+    return static_cast<uint8_t>((pageIndex + 1) % PAGE_COUNT);
+  return pageIndex;
+}
+
+// menu 優先 Menu；up+down 同時 → None；單 up → PrevPage；單 down → NextPage
+inline WakeAction chooseWakeAction(bool menu, bool up, bool down) {
+  if (menu) return WakeAction::Menu;
+  if (up && down) return WakeAction::None;
+  if (up) return WakeAction::PrevPage;
+  if (down) return WakeAction::NextPage;
+  return WakeAction::None;
+}
+
+inline void normalizeRtcState(QuoteRtcState* state, bool deepSleepWake) {
+  if (state == nullptr) return;
+  if (!deepSleepWake) {
+    state->pageIndex = 0;
+    state->targetEpoch = 0;
+    return;
+  }
+  if (state->pageIndex >= PAGE_COUNT) state->pageIndex = 0;
+}
+
+inline bool rtcTargetValid(uint32_t now, uint32_t target) {
+  if (target == 0) return false;
+  int64_t diff = static_cast<int64_t>(target) - now;
+  return diff >= -7LL * 86400 && diff <= 7LL * 86400;
+}
+
+inline uint32_t resumeTarget(uint32_t now, uint32_t target) {
+  if (!rtcTargetValid(now, target)) return now + 300;
+  return target > now ? target : now + 1;
+}
+
+inline uint32_t noCacheRetryTarget(uint32_t now, uint32_t target) {
+  if (!rtcTargetValid(now, target)) return now + 300;
+  if (target <= now) return now + 1;
+  uint32_t retry = now + 300;
+  return target < retry ? target : retry;
 }
 
 }  // namespace qlogic
