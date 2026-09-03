@@ -1,5 +1,6 @@
 // host 測試：g++ -std=c++17 -I src -I .pio/libdeps/esp32eink/ArduinoJson/src tests/host/test_quote_logic.cpp
 #include "quote_logic.h"
+#include "watchlist.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -303,7 +304,42 @@ static void testBlob() {
   printf("blob ok\n");
 }
 
+static void testWatchlistAndExCh() {
+  static const char EXPECTED[] =
+      "tse_t00.tw|tse_2330.tw|tse_2317.tw|tse_0050.tw|tse_006208.tw|"
+      "tse_1513.tw|tse_2412.tw|tse_2881.tw|tse_2002.tw";
+  static_assert(QUOTE_TOTAL == 9);
+  static_assert(STOCK_TOTAL == 8);
+  static_assert(PAGE_COUNT == 2);
+  static_assert(STOCKS_PER_PAGE == 4);
+  static_assert(PAGE_ROWS == 5);
+  assert(strcmp(WATCHLIST[5].code, "1513") == 0);
+  assert(strcmp(WATCHLIST[5].name, "中興電") == 0);
+  assert(strcmp(WATCHLIST[8].code, "2002") == 0);
+
+  const size_t len = strlen(EXPECTED);
+  char exact[sizeof EXPECTED];
+  memset(exact, 'x', sizeof exact);
+  assert(buildQuoteExCh(exact, len + 1));
+  assert(strcmp(exact, EXPECTED) == 0);
+
+  char shortBuf[sizeof EXPECTED];
+  memset(shortBuf, 'x', sizeof shortBuf);
+  assert(!buildQuoteExCh(shortBuf, len));
+  assert(shortBuf[0] == '\0');
+  assert(!buildQuoteExCh(nullptr, len + 1));
+  char zeroCap = 'x';
+  assert(!buildQuoteExCh(&zeroCap, 0));
+  assert(zeroCap == 'x');
+
+  char again[sizeof EXPECTED];
+  assert(buildQuoteExCh(again, sizeof again));
+  assert(strcmp(again, exact) == 0);
+  printf("watchlist/ex_ch ok\n");
+}
+
 int main() {
+  testWatchlistAndExCh();
   testParseNum();
   testValidDate();
   testParseJson();
