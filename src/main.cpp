@@ -55,7 +55,10 @@ static const char* toStatusLiteral(qlogic::ViewStatus s) {
 
 static void viewFromRecord(QuoteView* v, const qlogic::QuoteRecord& rec,
                            const char* timeStr, const char* status, uint8_t pageIndex) {
-  if (!timeStr) return;
+  if (!timeStr) {
+    memset(v, 0, sizeof *v);
+    return;
+  }
   bool visibleInvalid = false;
   for (int row = 0; row < QUOTE_ROWS; row++) {
     int idx = qlogic::quoteIndexForPageRow(pageIndex, row);
