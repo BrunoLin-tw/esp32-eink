@@ -8,6 +8,10 @@
 #include "watchlist.h"
 #include "secrets.h"
 #include "twse_root_ca.h"
+#if defined(QUOTE_TEST_PARTIAL_FIXTURE) || defined(QUOTE_TEST_UNTRADED_FIXTURE)
+#include <time.h>
+#include "quote_fixture.h"
+#endif
 
 static Preferences g_prefs;
 
@@ -33,6 +37,18 @@ bool quoteNtpSync(uint32_t timeoutMs) {
 }
 
 int quoteFetch(qlogic::MarketBatch* out) {
+#if defined(QUOTE_TEST_PARTIAL_FIXTURE) || defined(QUOTE_TEST_UNTRADED_FIXTURE)
+  char today[9] = {0};
+  qlogic::dateOfEpoch((uint32_t)time(nullptr), qlogic::TZ_TW, today, sizeof today);
+#if defined(QUOTE_TEST_PARTIAL_FIXTURE)
+  fillQuoteFixture(out, today, QuoteFixtureKind::PartialFailure);
+  LOGF("fixture partial\n");
+#else
+  fillQuoteFixture(out, today, QuoteFixtureKind::Untraded);
+  LOGF("fixture untraded\n");
+#endif
+  return 0;
+#else
   WiFiClientSecure client;
   client.setCACert(TWSE_ROOT_CA_PEM);      // 釘選根憑證（禁 setInsecure）
   client.setTimeout(10);                   // core 2.x API 以秒為單位（無 setConnectTimeout）
@@ -104,15 +120,22 @@ int quoteFetch(qlogic::MarketBatch* out) {
     return vr;
   }
   return 0;
+#endif
 }
 
 bool quoteRecordLoad(qlogic::QuoteRecord* rec) {
+#ifdef QUOTE_TEST_FORCE_NO_CACHE
+  (void)rec;
+  LOGF("fixture no cache\n");
+  return false;
+#else
   g_prefs.begin("quote", true);
   size_t got = g_prefs.getBytes("rec", rec, sizeof(qlogic::QuoteRecord));
   g_prefs.end();
   if (got != sizeof(qlogic::QuoteRecord)) return false;
   if (!qlogic::recordSane(*rec)) return false;
   return true;
+#endif
 }
 
 bool quoteRecordSave(qlogic::QuoteRecord* rec, uint32_t nowUtc) {
