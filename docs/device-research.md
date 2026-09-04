@@ -553,21 +553,21 @@ U8g2_for_Adafruit_GFX 1.8.0，`platformio.ini` 同 `esp32eink` 主環境。
 
 | 觀測 | 現象（log 證據） | 結果 |
 | --- | --- | --- |
-| 雙頁快取翻頁耗時 | `page cache 0->1`／`1->0` 共 14 輪（080718 8 輪、104329 4 輪、fixture 3 log 4 輪）：`display init`（約 633–635）→`sleep`（約 5526–5546）介於 4893–4913 ms，約 4.9 s；每輪含兩次 `_Update_Full : 1739998–1741001`（約各 1.74 s） | 通過；翻頁全程 cache-only，無 wifi／ntp／http 行 |
-| 定時／MENU 抓取輪耗時 | 盤中 timer 輪 `display init`（約 634）→`sleep` 約 6400–9300 ms（含 Wi-Fi 約 100 ms、NTP、一次 HTTPS 抓取 9 檔、`nvs save`、full refresh）；`nvs save` 時間戳約 1500–9700（視抓取延遲） | 通過；每輪 `nvs save`（資料變更時）或 write-on-change 略過（見下） |
+| 雙頁快取翻頁耗時 | `page cache 0->1`／`1->0` 共 16 輪（080718 8 輪、104329 4 輪、103600 1 輪、103829 1 輪、104044 2 輪）：`display init`（約 633–635）→`sleep`（約 5526–5546）介於 4893–4913 ms，約 4.9 s；每輪含兩次 `_Update_Full : 1739998–1741001`（約各 1.74 s） | 通過；翻頁全程 cache-only，無 wifi／ntp／http 行 |
+| 定時／MENU 抓取輪耗時 | 盤中 timer／MENU 抓取輪 `display init`（約 633–635）→`sleep` 約 6406–14647（約 6.4–14.7 s；典型約 6400–8800，偶發 HTTPS 慢輪拉高：080718 10:20 輪 `sleep` 12047 含 `wifi connected 3700 ms`＋`nvs save` 7144，104329 10:45 輪 `sleep` 14647 含 `nvs save` 9746；含 Wi-Fi、NTP、一次 HTTPS 抓取 9 檔、`nvs save`、full refresh）；Wi-Fi 通常約 100 ms（偶發 200–3700 ms）；`nvs save` 時間戳約 1504–9746（約 1500–9750，視抓取延遲） | 通過；每輪 `nvs save`（資料變更時）或 write-on-change 略過（見下） |
 | 收盤緩衝 13:30（state=2） | 104329：`state=2 local=13:30`，無 fetch／render／`nvs save` 行；`display init` [635]→`sleep` [1289]＝654 ms，`sleep 298s`→13:35:00 | 通過 |
 | 收盤定格 13:35 | 同 log：`state=2 local=13:35`→`nvs save` [1795]→`nvs save (close)` [1805]（相隔 10 ms）→兩次 `_Update_Full`→`sleep` [6717]；喚醒總計 [635]→[6717]＝6082 ms，其中渲染段 [1805]→[6717]＝4912 ms；`sleep 86400s`（target 1788742800，次週一 09:00） | 通過 |
-| 9 檔抓取成功 | 盤中每輪皆 `nvs save` 且無 `更新失敗`／`fetch fail` 行；定格後使用者確認兩頁為同一批收盤快照 | 通過 |
-| 頁碼保留 | 080718：10:16–10:20 翻頁輪皆睡回同一原目標（target 1788488400 不變）；09:00–10:15 共 15 輪 timer 更新頁碼維持 page=1；MENU 輪（mask=4）渲染後保留原頁 | 通過 |
-| write-on-change | 080718：10:19 MENU 輪（mask=4，page=0）抓取成功但無 `nvs save` 行即入睡（資料未變更不寫 flash） | 通過（觀察到一次） |
+| 9 檔抓取成功 | 除 write-on-change 無變化略過外皆 `nvs save`（當日至少兩次略過：080718 08:09 與 10:19 MENU 抓取，有 render 無 save）且無 `更新失敗`／`fetch fail` 行；定格後使用者確認兩頁為同一批收盤快照 | 通過 |
+| 頁碼保留 | 080718：10:16–10:20 翻頁輪皆睡回同一原目標（target 1788488400 不變）；09:00–10:15 共 16 輪 timer 更新頁碼維持 page=1；MENU 輪（mask=4）渲染後保留原頁 | 通過 |
+| write-on-change | 080718：08:09 與 10:19 兩輪 MENU 抓取（mask=4）成功但無 `nvs save` 行即入睡（資料未變更不寫 flash，有 render 無 save） | 通過（觀察到兩次） |
 | 卡鍵防護 | 080718 末輪 POWERON＋`[warn] stuck button`→`sleep 300s ext1=0`；102704（DOWN 卡鍵）與 103213（UP 卡鍵）同樣 300 s timer-only；EXIT／PRESS 按住不觸發（mask 檢查僅含 MENU／UP／DOWN） | 通過 |
 | POWERON 重置 | 所有 `wake=0`（POWERON）開機行皆 `page=0 target=0`，回第 1 頁 | 通過 |
-| NVS v1→v2 單次失效 | 觀察：080718 首個 POWERON（08:07，page=0 target=0）無 `nvs save` 即入睡；次輪 MENU（mask=4）隨即 `nvs save`。推論：舊 v1 blob 被視為無快取並重新連網抓取（符合 spec 非目標「舊 blob 不遷移」）；log 本身不印出版本號，此為行為推論而非直接量測 | 觀察＋推論（已標示） |
+| NVS v1→v2 單次失效 | 觀察：080718 首個 POWERON（08:07，page=0 target=0）無 `nvs save` 即入睡；次輪 MENU（mask=4）隨即 `nvs save`。推論：舊 v1 blob 被視為無快取並重新連網抓取（符合 spec 非目標「舊 blob 不遷移」）；惟首輪 `state=0 PreMarket` 本就不抓取／渲染（無論 blob 版本），故單憑「無 save」不能證明 v1 拒收——證據與 v1-blob 拒收一致但受 PreMarket 不抓取混淆，次輪 MENU 存下 v2 blob 才是正向證據；log 本身不印出版本號，此為行為推論而非直接量測 | 觀察＋推論（已標示） |
 | fixture 容錯 | 103600（`fixture untraded`）：1513 列顯示 `--`，兩頁無「部分失敗」（目視確認）；103829（`fixture partial`）：第 2 頁 2412 顯示 `--`＋「部分失敗」；104044（nocache）：連續兩次翻頁回傳同一 retry target＝1788489900 | 通過 |
 | 無快取翻頁 | 104044 nocache 輪：`page cache`＋`fixture no cache` 行，full refresh 照常，睡回同一 retry deadline（未從第二次按鍵重起 300 s） | 通過 |
 | 混合循環 | 080718（33 boots：timer／翻頁／MENU／卡鍵）＋104329（40 boots：盤中→收盤緩衝→定格→定格後翻頁）合計 70＋ boots | 通過，無 panic／abort／`Busy Timeout!` |
 
 異常事件：
 - 無面板異常：使用者目視確認兩頁均無缺字、無殘影異常、定格後兩頁同批。
-- `logs/device-monitor-260904-080408.log`（2 boots）出現 `wifi fail (15000 ms)` 後走失敗路徑（full refresh＋`sleep 300s`）；`logs/device-monitor-260904-103103.log` 首輪出現 `ntp fail` 後同樣走短睡重試，次輪即恢復 `ntp synced`。兩者皆為既有失敗路徑的正確行為，不列為異常。
+- `logs/device-monitor-260904-080408.log`（2 boots）出現 `wifi fail (15000 ms)` 後走失敗路徑（full refresh＋`sleep 300s`）；`logs/device-monitor-260904-103103.log` 首輪出現 `ntp fail` 後同樣走短睡重試，次輪即恢復 `ntp synced`。兩者皆為既有失敗路徑的正確行為，不列為異常。未同步時鐘寫下的小 epoch 目標（320／640／315）後續未被沿用（POWERON 重置或 `rtcTargetValid` ±7 天窗口拒收），次輪即自癒；失敗輪仍照既有失敗路徑渲染錯誤畫面（兩次 `_Update_Full`）。
 - 定格後翻頁（104329 末兩輪）睡回同一週一 09:00 長睡目標（`sleep 86400s ext1=1`），符合「翻頁睡回原目標」規則。

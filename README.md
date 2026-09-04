@@ -120,7 +120,7 @@ make -C /tmp/opencode/u8g2/tools/font/bdfconv
    | 週末／休市日 | 長睡至次交易日 09:00 |
 
     - **MENU 鍵**（GPIO2）：任何時刻按一下＝立即更新目前頁（一次抓取全部 9 檔）。抓取失敗顯示快取＋「更新失敗」，5 分後自動重試。
-    - **UP（GPIO6）／DOWN（GPIO4）**：快取翻頁（不連網、不做 NTP、不寫 NVS），約一次 full refresh（約 4.4 秒）；翻頁後睡回原排程目標並保留目前頁。標頭顯示 `1/2` 或 `2/2`，快取時間沿用 `savedEpoch`。
+    - **UP（GPIO6）／DOWN（GPIO4）**：快取翻頁（不連網、不做 NTP、不寫 NVS），兩次 `_Update_Full` 各約 1.74 秒、`display init`→`sleep` 約 4.9 秒；翻頁後睡回原排程目標並保留目前頁。標頭顯示 `1/2` 或 `2/2`，快取時間沿用 `savedEpoch`。
     - **EXIT（GPIO1）／PRESS（GPIO5）**：本版未使用，不加入喚醒 mask。
     - Wi-Fi／NTP 失敗：顯示快取或錯誤訊息，5 分短睡重試；NTP 未同步時不判定市場狀態、不誤判假日。
     - 按住 MENU／UP／DOWN 任一喚醒鍵開機（卡鍵）：該輪 5 分鐘 timer-only（防喚醒迴圈），放開後恢復正常；按住 EXIT 或 PRESS 不觸發卡鍵防護。
